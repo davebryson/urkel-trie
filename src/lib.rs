@@ -59,4 +59,22 @@ mod tests {
         assert!(r.is_ok());
         assert_eq!(Ok(Vec::from("value-1")), r);
     }
+
+    #[test]
+    fn test_a_bunch() {
+        let mut tree = UrkelTree::new();
+
+        for i in 1..10000 {
+            tree.insert(format!("name-{}", i).as_bytes(), format!("value-{}", i));
+        }
+
+        assert_eq!(tree.get(b"name-5001"), Some(Vec::from("value-5001")));
+
+        let mut proof1 = tree.prove(b"name-401");
+        assert_eq!(proof1.proof_type, ProofType::Exists);
+
+        let r = proof1.verify(tree.get_root(), b"name-401");
+        assert!(r.is_ok());
+        assert_eq!(Ok(Vec::from("value-401")), r);
+    }
 }
