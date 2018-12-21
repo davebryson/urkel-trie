@@ -247,4 +247,43 @@ impl UrkelTree {
 
         proof
     }
+
+    pub fn commit(&mut self) {
+        self.root = self.root.take().map(|n| self.write_to_store(n));
+    }
+
+    fn write_to_store(&self, root: Box<Node>) -> Box<Node> {
+        match *root {
+            Node::Internal { left, right, .. } => {
+                println!("in internal...left");
+                let left_node = self.write_to_store(left);
+                println!("in internal...right");
+                let right_node = self.write_to_store(right);
+
+                let nn = Node::Internal {
+                    left: left_node,
+                    right: right_node,
+                    hash: Digest::default(),
+                };
+
+                // Write to store
+                println!("Write Internal Node: {:?}", nn);
+
+                return nn.into_hash_node().into_boxed();
+            }
+            Node::Leaf { .. } => {
+                // Write to store
+                println!("Write Leaf Node: {:?}", root);
+                return root.into_hash_node().into_boxed();
+            }
+            Node::Hash { .. } => {
+                println!("Hit hash");
+                return root;
+            }
+            Node::Empty {} => {
+                println!("Hit empty");
+                return root;
+            }
+        };
+    }
 }

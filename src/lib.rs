@@ -11,7 +11,6 @@ pub fn has_bit(key: &Digest, index: usize) -> bool {
     let oct = index >> 3;
     let bit = index & 7;
     match (key.0[oct] >> (7 - bit)) & 1 {
-        0 => false,
         1 => true,
         _ => false,
     }
@@ -76,5 +75,15 @@ mod tests {
         let r = proof1.verify(tree.get_root(), b"name-401");
         assert!(r.is_ok());
         assert_eq!(Ok(Vec::from("value-401")), r);
+    }
+
+    #[test]
+    fn test_commit() {
+        let mut tree = UrkelTree::new();
+        tree.insert(b"name-1", "value-1");
+        tree.insert(b"name-2", "value-2");
+        tree.commit();
+
+        assert_ne!(Digest::zero(), tree.get_root());
     }
 }

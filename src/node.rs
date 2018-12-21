@@ -1,4 +1,5 @@
 use super::hasher::{hash_internal, hash_leaf_value, Digest};
+use std::fmt;
 
 #[derive(Clone, PartialEq)]
 #[allow(dead_code)]
@@ -38,6 +39,15 @@ impl Node {
         }
     }
 
+    /// Convert the given node into a HashNode
+    pub fn into_hash_node(self) -> Node {
+        match self {
+            Node::Internal { .. } => Node::Hash { hash: self.hash() },
+            Node::Leaf { .. } => Node::Hash { hash: self.hash() },
+            _ => self,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn is_leaf(&self) -> bool {
         match self {
@@ -71,5 +81,18 @@ impl Node {
     #[allow(dead_code)]
     pub fn into_boxed(self) -> Box<Node> {
         Box::new(self)
+    }
+}
+
+impl fmt::Debug for Node {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Node::Empty {} => write!(f, "Node::Empty"),
+            Node::Leaf { hash, .. } => write!(f, "Node:Leaf({:x})", hash),
+            Node::Internal { left, right, .. } => {
+                write!(f, "Node:Internal({:x}, {:x})", left.hash(), right.hash())
+            }
+            Node::Hash { hash, .. } => write!(f, "Node::Hash({:x})", hash),
+        }
     }
 }
