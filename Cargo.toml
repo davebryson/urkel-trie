@@ -1,0 +1,8 @@
+[package]
+name = "urkel-trie"
+version = "0.1.0"
+authors = ["David Bryson"]
+edition = "2018"
+
+[dependencies]
+blake2-rfc = "0.2.18"
