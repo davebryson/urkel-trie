@@ -1,5 +1,6 @@
 use super::has_bit;
-use super::hasher::{hash, hash_internal, hash_leaf, hash_leaf_value, Digest, KEY_SIZE};
+use super::hasher::{hash, hash_internal, hash_leaf, hash_leaf_value, Digest};
+use super::KEY_SIZE;
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum ProofType {

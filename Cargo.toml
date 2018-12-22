@@ -6,3 +6,4 @@ edition = "2018"
 
 [dependencies]
 blake2-rfc = "0.2.18"
+byteorder = "1.2.7"

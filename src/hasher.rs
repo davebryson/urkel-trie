@@ -1,12 +1,8 @@
+use super::{INTERNAL_PREFIX, KEY_SIZE, LEAF_PREFIX};
 use blake2_rfc::blake2b::Blake2b;
 use std::fmt;
 
-const LEAF_PREFIX: u8 = 0x00u8;
-const INTERNAL_PREFIX: u8 = 0x01u8;
-
-pub const KEY_SIZE: usize = 256;
-
-#[derive(Eq, PartialEq, PartialOrd, Debug, Clone, Copy)]
+#[derive(Eq, PartialEq, PartialOrd, Clone, Copy)]
 pub struct Digest(pub [u8; 32]);
 
 impl Digest {
@@ -39,6 +35,12 @@ impl fmt::LowerHex for Digest {
             write!(f, "{:02x}", byte)?;
         }
         Ok(())
+    }
+}
+
+impl fmt::Debug for Digest {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:x}", self)
     }
 }
 

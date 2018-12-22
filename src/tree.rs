@@ -1,7 +1,8 @@
 use super::has_bit;
-use super::hasher::{hash, hash_leaf_value, Digest, KEY_SIZE};
+use super::hasher::{hash, hash_leaf_value, Digest};
 use super::node::Node;
 use super::proof::{Proof, ProofType};
+use super::KEY_SIZE;
 
 #[derive(Clone)]
 pub struct UrkelTree {
@@ -25,7 +26,7 @@ impl UrkelTree {
         let hashed_key = hash(key);
         match self.root.take() {
             Some(n) => self.root = self.add_child(n, hashed_key, value.into()),
-            None => self.root = Some(Node::new_leaf_node(hashed_key, value)),
+            None => self.root = Some(Node::new_leaf_node(hashed_key, value).into_boxed()),
         }
     }
 
@@ -73,27 +74,25 @@ impl UrkelTree {
         }
 
         // Start with a leaf of the new K/V
-        let mut new_root = Node::Leaf {
-            hash: leaf_hash,
-            key: nkey,
-            value: Some(value),
-        };
+        let mut new_root = Node::new_leaf_node(nkey, value);
 
         // Walk the tree bottom up to form the new root
         for n in nodes.into_iter().rev() {
             depth -= 1;
             if has_bit(&nkey, depth) {
-                new_root = Node::Internal {
-                    left: Box::new(n),
-                    right: Box::new(new_root),
-                    hash: Digest::default(),
-                };
+                new_root = Node::new_internal_node(n, new_root);
+            /*new_root = Node::Internal {
+                left: Box::new(n),
+                right: Box::new(new_root),
+                hash: Digest::default(),
+            };*/
             } else {
-                new_root = Node::Internal {
+                new_root = Node::new_internal_node(new_root, n);
+                /*new_root = Node::Internal {
                     left: Box::new(new_root),
                     right: Box::new(n),
                     hash: Digest::default(),
-                };
+                };*/
             }
         }
         // Set the new root
@@ -193,17 +192,19 @@ impl UrkelTree {
         for n in nodes.into_iter().rev() {
             depth -= 1;
             if has_bit(&nkey, depth) {
-                new_root = Node::Internal {
-                    left: Box::new(n),
-                    right: Box::new(new_root),
-                    hash: Digest::default(),
-                };
+                new_root = Node::new_internal_node(n, new_root);
+            /*new_root = Node::Internal {
+                left: Box::new(n),
+                right: Box::new(new_root),
+                hash: Digest::default(),
+            };*/
             } else {
-                new_root = Node::Internal {
+                new_root = Node::new_internal_node(new_root, n);
+                /*new_root = Node::Internal {
                     left: Box::new(new_root),
                     right: Box::new(n),
                     hash: Digest::default(),
-                };
+                };*/
             }
         }
 
@@ -261,6 +262,8 @@ impl UrkelTree {
                 let right_node = self.write_to_store(right);
 
                 let nn = Node::Internal {
+                    index: 0,
+                    pos: 0,
                     left: left_node,
                     right: right_node,
                     hash: Digest::default(),

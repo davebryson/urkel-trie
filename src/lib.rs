@@ -1,4 +1,5 @@
 extern crate blake2_rfc;
+extern crate byteorder;
 
 mod hasher;
 mod node;
@@ -6,6 +7,10 @@ mod proof;
 mod tree;
 
 use crate::hasher::Digest;
+
+pub const LEAF_PREFIX: u8 = 0x00u8;
+pub const INTERNAL_PREFIX: u8 = 0x01u8;
+pub const KEY_SIZE: usize = 256;
 
 pub fn has_bit(key: &Digest, index: usize) -> bool {
     let oct = index >> 3;
