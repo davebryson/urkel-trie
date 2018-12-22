@@ -81,18 +81,8 @@ impl UrkelTree {
             depth -= 1;
             if has_bit(&nkey, depth) {
                 new_root = Node::new_internal_node(n, new_root);
-            /*new_root = Node::Internal {
-                left: Box::new(n),
-                right: Box::new(new_root),
-                hash: Digest::default(),
-            };*/
             } else {
                 new_root = Node::new_internal_node(new_root, n);
-                /*new_root = Node::Internal {
-                    left: Box::new(new_root),
-                    right: Box::new(n),
-                    hash: Digest::default(),
-                };*/
             }
         }
         // Set the new root
@@ -193,18 +183,8 @@ impl UrkelTree {
             depth -= 1;
             if has_bit(&nkey, depth) {
                 new_root = Node::new_internal_node(n, new_root);
-            /*new_root = Node::Internal {
-                left: Box::new(n),
-                right: Box::new(new_root),
-                hash: Digest::default(),
-            };*/
             } else {
                 new_root = Node::new_internal_node(new_root, n);
-                /*new_root = Node::Internal {
-                    left: Box::new(new_root),
-                    right: Box::new(n),
-                    hash: Digest::default(),
-                };*/
             }
         }
 

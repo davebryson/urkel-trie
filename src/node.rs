@@ -343,5 +343,8 @@ mod tests {
         };
 
         assert!(r1);
+
+        let shouldnot = Node::Empty {}.encode();
+        assert!(shouldnot.is_err());
     }
 }

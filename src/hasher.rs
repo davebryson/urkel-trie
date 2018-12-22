@@ -1,4 +1,4 @@
-use super::{INTERNAL_PREFIX, KEY_SIZE, LEAF_PREFIX};
+use super::{INTERNAL_PREFIX, LEAF_PREFIX};
 use blake2_rfc::blake2b::Blake2b;
 use std::fmt;
 
@@ -32,7 +32,7 @@ impl fmt::LowerHex for Digest {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "0x")?;
         for byte in &self.0[0..32] {
-            write!(f, "{:02x}", byte)?;
+            write!(f, "Digest {:02x}", byte)?;
         }
         Ok(())
     }
