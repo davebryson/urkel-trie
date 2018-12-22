@@ -4,6 +4,7 @@ extern crate byteorder;
 mod hasher;
 mod node;
 mod proof;
+mod store;
 mod tree;
 
 use crate::hasher::Digest;
