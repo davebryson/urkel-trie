@@ -159,7 +159,7 @@ impl Node {
                 // Write the internal flag
                 writer.write_u8(INTERNAL_PREFIX)?;
                 // index of file
-                writer.write_u16::<LittleEndian>(lindex * 2)?;
+                writer.write_u16::<LittleEndian>(lindex)?;
                 // pos
                 writer.write_u32::<LittleEndian>(lpos)?;
                 // hash
@@ -279,13 +279,15 @@ mod tests {
 
     #[test]
     fn test_codec() {
+        let k = hash(b"name-1");
         let v = Vec::from("value-1");
+        let leaf_hash = hash_leaf_value(k, v.as_slice());
         let sz: u16 = v.len() as u16;
         let leaf = Node::Leaf {
             index: 1,
             pos: 235,
-            hash: Digest::default(),
-            key: hash(b"name-1"),
+            hash: leaf_hash,
+            key: k,
             value: Some(v),
             vindex: 1,
             vpos: 500,
@@ -314,5 +316,32 @@ mod tests {
             _ => false,
         };
         assert!(r);
+
+        let internal = Node::Internal {
+            index: 0,
+            pos: 0,
+            hash: Digest::default(),
+            left: leaf.into_boxed(),
+            right: Node::Empty {}.into_boxed(),
+        };
+        let ibits = internal.encode();
+        assert!(ibits.is_ok());
+
+        let iback = Node::decode(ibits.unwrap());
+        assert!(iback.is_ok());
+
+        let r1 = match iback.unwrap() {
+            Node::Internal { left, right, .. } => {
+                let (li, lp) = left.get_index_position();
+                assert_eq!(left.hash(), leaf_hash);
+                assert_eq!(1, li);
+                assert_eq!(235, lp);
+                assert_eq!(Node::Empty {}, *right);
+                true
+            }
+            _ => false,
+        };
+
+        assert!(r1);
     }
 }
