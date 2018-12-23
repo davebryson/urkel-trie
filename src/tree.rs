@@ -235,23 +235,30 @@ impl UrkelTree {
 
     fn write_to_store(&self, root: Box<Node>) -> Box<Node> {
         match *root {
-            Node::Internal { left, right, .. } => {
-                println!("in internal...left");
+            Node::Internal {
+                left,
+                right,
+                index,
+                pos,
+                ..
+            } => {
                 let left_node = self.write_to_store(left);
-                println!("in internal...right");
                 let right_node = self.write_to_store(right);
 
                 let nn = Node::Internal {
-                    index: 0,
-                    pos: 0,
+                    index,
+                    pos,
                     left: left_node,
                     right: right_node,
                     hash: Digest::default(),
                 };
 
-                // Write to store
-                println!("Write Internal Node: {:?}", nn);
-
+                if index == 0 {
+                    // Write to store...
+                    // let encoded = nn.encode();
+                    // index, pos = store.write(encoded)
+                    //nn.set_index_position(index, pos);
+                }
                 return nn.into_hash_node().into_boxed();
             }
             Node::Leaf { .. } => {

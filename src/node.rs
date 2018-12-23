@@ -5,6 +5,17 @@ use std::fmt;
 use std::io;
 use std::io::{Cursor, Error, ErrorKind};
 
+struct StoreData {
+    pub index: u16,
+    pub pos: u32,
+}
+
+struct StoreValueData {
+    pub vindex: u16,
+    pub vpos: u32,
+    pub vsize: u16,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Node {
     Empty {},
@@ -51,12 +62,63 @@ impl Node {
         }
     }
 
+    pub fn get_value(&self) -> Option<&Vec<u8>> {
+        match self {
+            Node::Leaf { ref value, .. } => value.as_ref().map(|v| v),
+            _ => None,
+        }
+    }
+
+    pub fn set_value_index_position(&mut self, i: u16, p: u32) {
+        match self {
+            Node::Leaf {
+                ref mut vindex,
+                ref mut vpos,
+                ..
+            } => {
+                *vindex = i;
+                *vpos = p;
+            }
+            _ => unimplemented!(),
+        }
+    }
+
     pub fn get_index_position(&self) -> (u16, u32) {
         match self {
             Node::Leaf { index, pos, .. } => (*index, *pos),
             Node::Internal { index, pos, .. } => (*index, *pos),
             Node::Hash { index, pos, .. } => (*index, *pos),
             Node::Empty {} => (0, 0),
+        }
+    }
+
+    pub fn set_index_position(&mut self, i: u16, p: u32) {
+        match self {
+            Node::Leaf {
+                ref mut index,
+                ref mut pos,
+                ..
+            } => {
+                *index = i;
+                *pos = p;
+            }
+            Node::Internal {
+                ref mut index,
+                ref mut pos,
+                ..
+            } => {
+                *index = i;
+                *pos = p;
+            }
+            Node::Hash {
+                ref mut index,
+                ref mut pos,
+                ..
+            } => {
+                *index = i;
+                *pos = p;
+            }
+            _ => unimplemented!(),
         }
     }
 
@@ -278,7 +340,7 @@ mod tests {
     use crate::hasher::hash;
 
     #[test]
-    fn test_codec() {
+    fn test_node_codec() {
         let k = hash(b"name-1");
         let v = Vec::from("value-1");
         let leaf_hash = hash_leaf_value(k, v.as_slice());

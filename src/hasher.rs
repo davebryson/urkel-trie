@@ -32,7 +32,7 @@ impl fmt::LowerHex for Digest {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "0x")?;
         for byte in &self.0[0..32] {
-            write!(f, "Digest {:02x}", byte)?;
+            write!(f, "{:02x}", byte)?;
         }
         Ok(())
     }

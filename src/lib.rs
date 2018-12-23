@@ -29,7 +29,7 @@ mod tests {
     use crate::tree::UrkelTree;
 
     #[test]
-    fn test_basics() {
+    fn test_tree_basics() {
         let mut tree = UrkelTree::new();
         tree.insert(b"name-1", "value-1");
         tree.insert(b"name-2", "value-2");
@@ -49,7 +49,7 @@ mod tests {
     }
 
     #[test]
-    fn test_proof() {
+    fn test_tree_proof() {
         let mut tree = UrkelTree::new();
         tree.insert(b"name-1", "value-1");
         tree.insert(b"name-2", "value-2");
@@ -66,7 +66,7 @@ mod tests {
     }
 
     #[test]
-    fn test_a_bunch() {
+    fn test_tree_a_bunch() {
         let mut tree = UrkelTree::new();
 
         for i in 1..10000 {
@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn test_commit() {
+    fn test_tree_commit() {
         let mut tree = UrkelTree::new();
         tree.insert(b"name-1", "value-1");
         tree.insert(b"name-2", "value-2");
