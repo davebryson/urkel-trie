@@ -1,24 +1,27 @@
+use super::db::Store;
 use super::has_bit;
 use super::hasher::{hash, hash_leaf_value, Digest};
 use super::node::Node;
 use super::proof::{Proof, ProofType};
 use super::KEY_SIZE;
+//use log::{info, trace, warn};
 
-#[derive(Clone)]
+//#[derive(Clone)]
 pub struct UrkelTree {
-    /// Root Node
     root: Option<Box<Node>>,
+    store: Store,
 }
 
 impl UrkelTree {
-    #[allow(dead_code)]
+    // TODO: pass dir here
     pub fn new() -> Self {
+        let s = Store::open("data").unwrap();
         UrkelTree {
             root: Some(Box::new(Node::Empty {})),
+            store: s,
         }
     }
 
-    #[allow(dead_code)]
     pub fn insert<T>(&mut self, key: &[u8], value: T)
     where
         T: Into<Vec<u8>>,
@@ -30,7 +33,6 @@ impl UrkelTree {
         }
     }
 
-    #[allow(dead_code)]
     fn add_child(&self, mut root: Box<Node>, nkey: Digest, value: Vec<u8>) -> Option<Box<Node>> {
         let mut depth = 0;
         let mut nodes = Vec::<Node>::new();
@@ -39,7 +41,28 @@ impl UrkelTree {
         loop {
             match *root {
                 Node::Empty {} => break,
-                Node::Hash { .. } => break,
+                Node::Hash {
+                    index, pos, hash, ..
+                } => {
+                    println!("insert hash node");
+                    // Get the node from store
+                    //if let Ok(mut hn) = self.store.get_node(index, pos, root.is_leaf()) {
+                    //    hn.set_hash(hash);
+                    //    root = hn.into_boxed();
+                    //}
+                    //break;
+
+                    let tn = self
+                        .store
+                        .get_node(index, pos, root.is_leaf())
+                        .and_then(|mut n| {
+                            n.set_hash(hash);
+                            Ok(n)
+                        })
+                        .expect("Should have got a hashnode");
+
+                    root = tn.into_boxed();
+                }
                 Node::Leaf { key, hash, .. } => {
                     if nkey == key {
                         if leaf_hash == hash {
@@ -54,13 +77,11 @@ impl UrkelTree {
                     }
 
                     nodes.push(*root);
-
                     depth += 1;
                     break;
                 }
                 Node::Internal { left, right, .. } => {
                     assert_ne!(depth, KEY_SIZE);
-
                     if has_bit(&nkey, depth) {
                         nodes.push(*left);
                         root = right;
@@ -85,32 +106,71 @@ impl UrkelTree {
                 new_root = Node::new_internal_node(new_root, n);
             }
         }
-        // Set the new root
+        // return the new root
         Some(Box::new(new_root))
     }
 
-    #[allow(dead_code)]
+    /// Get the root hash
     pub fn get_root(&self) -> Digest {
         self.root.as_ref().map_or(Digest::zero(), |r| r.hash())
     }
 
-    #[allow(dead_code)]
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         let mut depth = 0;
         let nkey = hash(key);
         let mut current = self.root.clone().unwrap();
         loop {
             match *current {
-                Node::Leaf { key, value, .. } => {
+                Node::Hash {
+                    index, pos, hash, ..
+                } => {
+                    // Get the node from store
+                    /*if let Ok(mut hn) = self.store.get_node(index, pos, current.is_leaf()) {
+                        hn.set_hash(hash);
+                        println!("get - load @ {:?}", hn);
+                        current = hn.into_boxed();
+                    }*/
+                    current = self
+                        .store
+                        .get_node(index, pos, current.is_leaf())
+                        .and_then(|mut n| {
+                            n.set_hash(hash);
+                            Ok(n.into_boxed())
+                        })
+                        .expect("Should have got a hashnode");
+                }
+                Node::Leaf {
+                    key,
+                    vindex,
+                    vpos,
+                    vsize,
+                    value,
+                    ..
+                } => {
                     if nkey != key {
                         return None;
                     }
-                    return value;
+
+                    // If the value ! = nil return it
+                    // other wise fetch from the store below
+                    if value.is_some() {
+                        return value;
+                    }
+
+                    println!("try to get value @ {}", vpos);
+                    // Get the value from the store
+                    if let Ok(v) = self.store.get_value(vindex, vpos, vsize) {
+                        return Some(v);
+                    }
+
+                    return None;
                 }
                 Node::Internal { left, right, .. } => {
                     if has_bit(&nkey, depth) {
+                        println!("go right");
                         current = right;
                     } else {
+                        println!("go left");
                         current = left;
                     }
                     depth += 1;
@@ -134,7 +194,14 @@ impl UrkelTree {
         loop {
             match *root {
                 Node::Empty {} => return Some(root),
-                Node::Hash { .. } => break,
+                Node::Hash {
+                    index, pos, hash, ..
+                } => {
+                    if let Ok(mut hn) = self.store.get_node(index, pos, root.is_leaf()) {
+                        hn.set_hash(hash);
+                        root = hn.into_boxed();
+                    }
+                }
                 Node::Internal { left, right, .. } => {
                     assert_ne!(depth, KEY_SIZE);
 
@@ -230,10 +297,32 @@ impl UrkelTree {
     }
 
     pub fn commit(&mut self) {
-        self.root = self.root.take().map(|n| self.write_to_store(n));
+        // Commit the nodes and set a new root
+
+        if let Some(r) = self.root.take().map(|n| self.write_to_store(n)) {
+            let (i, p) = r.get_index_position();
+            let is_leaf = r.is_leaf();
+            self.store.commit(i, p, is_leaf).expect("Commit failed");
+            println!("Set new root");
+            self.root = Some(r);
+        }
+        //self.root = self.root.take().map(|n| self.write_to_store(n));
+        //let (i, p) = self.root.get_index_position();
+        //let is_leaf = self.root.is_leaf();
+        //self.store.commit(i, p, is_leaf).expect("Commit failed");
+        /*self.root = self
+        .root
+        .take()
+        .map(|n| self.write_to_store(n))
+        .map(|new_root| {
+            let (i, p) = new_root.get_index_position();
+            let is_leaf = new_root.is_leaf();
+            self.store.commit(i, p, is_leaf).expect("Commit failed");
+            new_root
+        });*/
     }
 
-    fn write_to_store(&self, root: Box<Node>) -> Box<Node> {
+    fn write_to_store(&mut self, root: Box<Node>) -> Box<Node> {
         match *root {
             Node::Internal {
                 left,
@@ -245,7 +334,7 @@ impl UrkelTree {
                 let left_node = self.write_to_store(left);
                 let right_node = self.write_to_store(right);
 
-                let nn = Node::Internal {
+                let mut nn = Node::Internal {
                     index,
                     pos,
                     left: left_node,
@@ -253,25 +342,56 @@ impl UrkelTree {
                     hash: Digest::default(),
                 };
 
+                println!("loop");
                 if index == 0 {
                     // Write to store...
-                    // let encoded = nn.encode();
-                    // index, pos = store.write(encoded)
-                    //nn.set_index_position(index, pos);
+                    //nn.encode().and_then(|bits| {
+                    //  self.store.write_node(bits).and_then(|(i,p)| nn.set_index_position(i, p))
+                    //);
+
+                    let encoded = nn.encode().unwrap();
+                    let (i, p) = self.store.write_node(encoded).unwrap();
+                    nn.set_index_position(i, p);
+                    println!("write to store internal @ {} {}", i, p);
                 }
+
                 return nn.into_hash_node().into_boxed();
             }
-            Node::Leaf { .. } => {
-                // Write to store
-                println!("Write Leaf Node: {:?}", root);
+            Node::Leaf {
+                index,
+                pos,
+                key,
+                ref value,
+                ..
+            } => {
+                println!("leaf loop");
+                if index == 0 && value.is_some() {
+                    let v = value.clone();
+                    let v1 = value.clone();
+                    //let v2 = value.clone();
+
+                    //println!("Trying to write leaf: {:?}", key);
+                    let mut l = Node::new_leaf_node(key, v.unwrap());
+                    //l.set_index_position(index, pos);
+
+                    let (v_i, v_p) = self.store.write_value(v1.unwrap().as_ref()).unwrap();
+                    l.set_value_index_position(v_i, v_p);
+                    //println!("write to store leaf value @ {} {}", v_i, v_p);
+
+                    let encoded = l.encode().unwrap();
+                    let (i, p) = self.store.write_node(encoded).unwrap();
+                    l.set_index_position(i, p);
+                    println!("write to store leaf @ {} {}", i, p);
+
+                    return l.into_hash_node().into_boxed();
+                }
+
                 return root.into_hash_node().into_boxed();
             }
             Node::Hash { .. } => {
-                println!("Hit hash");
                 return root;
             }
             Node::Empty {} => {
-                println!("Hit empty");
                 return root;
             }
         };

@@ -1,29 +1,25 @@
 use super::hasher::{hash_internal, hash_leaf_value, Digest};
-use super::{INTERNAL_PREFIX, LEAF_PREFIX};
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::fmt;
 use std::io;
 use std::io::{Cursor, Error, ErrorKind};
 
-struct StoreData {
-    pub index: u16,
-    pub pos: u32,
-}
-
-struct StoreValueData {
-    pub vindex: u16,
-    pub vpos: u32,
-    pub vsize: u16,
-}
+pub const INTERNAL_NODE_SIZE: usize = 76;
+pub const LEAF_NODE_SIZE: usize = 40;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Node {
+    /// Sentinal node
     Empty {},
+    /// Compact representation of a leaf/internal node used in storage
+    /// the is_leaf flag is set during encoding/decoding
     Hash {
         index: u16,
         pos: u32,
         hash: Digest,
+        is_leaf: u8,
     },
+    /// Holds actual key/value along with positional information for both
+    /// the leaf node and the leaf value as they are stored in different places  
     Leaf {
         index: u16,
         pos: u32,
@@ -34,6 +30,7 @@ pub enum Node {
         vpos: u32,
         vsize: u16,
     },
+    // Branch node pointing to siblings
     Internal {
         index: u16,
         pos: u32,
@@ -44,7 +41,7 @@ pub enum Node {
 }
 
 impl Node {
-    #[allow(dead_code)]
+    /// Calculate a hash for the given node
     pub fn hash(&self) -> Digest {
         match self {
             Node::Empty {} => Digest::zero(),
@@ -62,6 +59,16 @@ impl Node {
         }
     }
 
+    pub fn set_hash(&mut self, data: Digest) {
+        match self {
+            Node::Hash { ref mut hash, .. } => *hash = data,
+            Node::Leaf { ref mut hash, .. } => *hash = data,
+            Node::Internal { ref mut hash, .. } => *hash = data,
+            _ => unimplemented!(),
+        }
+    }
+
+    /// Get the value of a leaf node
     pub fn get_value(&self) -> Option<&Vec<u8>> {
         match self {
             Node::Leaf { ref value, .. } => value.as_ref().map(|v| v),
@@ -69,6 +76,8 @@ impl Node {
         }
     }
 
+    /// Set the position of the actual leaf value and it's position
+    /// in the leaf node. Used to update the node when writing to storage.
     pub fn set_value_index_position(&mut self, i: u16, p: u32) {
         match self {
             Node::Leaf {
@@ -83,6 +92,21 @@ impl Node {
         }
     }
 
+    /// Get information associated with the actual leaf value:
+    /// the file index, value pos, and value size
+    pub fn get_leaf_value_data(&self) -> (u16, u32, u16) {
+        match self {
+            Node::Leaf {
+                vindex,
+                vpos,
+                vsize,
+                ..
+            } => (*vindex, *vpos, *vsize),
+            _ => unimplemented!(),
+        }
+    }
+
+    /// Get the storage index and position of a given node
     pub fn get_index_position(&self) -> (u16, u32) {
         match self {
             Node::Leaf { index, pos, .. } => (*index, *pos),
@@ -92,6 +116,7 @@ impl Node {
         }
     }
 
+    /// Set the index and position for a given node.
     pub fn set_index_position(&mut self, i: u16, p: u32) {
         match self {
             Node::Leaf {
@@ -122,32 +147,35 @@ impl Node {
         }
     }
 
-    /// Convert the given node into a HashNode
+    /// Convert the given node into a Hash node
     pub fn into_hash_node(self) -> Node {
         match self {
             Node::Internal { index, pos, .. } => Node::Hash {
                 index,
                 pos,
                 hash: self.hash(),
+                is_leaf: 0,
             },
             Node::Leaf { index, pos, .. } => Node::Hash {
                 index,
                 pos,
                 hash: self.hash(),
+                is_leaf: 1,
             },
             _ => self,
         }
     }
 
-    #[allow(dead_code)]
+    /// Is the node a leaf node?
     pub fn is_leaf(&self) -> bool {
         match self {
             Node::Leaf { .. } => true,
+            Node::Hash { ref is_leaf, .. } => *is_leaf == 1,
             _ => false,
         }
     }
 
-    #[allow(dead_code)]
+    /// Is the node and Empty (sentinal node)
     pub fn is_empty(&self) -> bool {
         match self {
             Node::Empty {} => true,
@@ -155,7 +183,8 @@ impl Node {
         }
     }
 
-    #[allow(dead_code)]
+    /// Create a new leaf node.  It automatically calculates
+    /// the leaf value hash
     pub fn new_leaf_node<T>(key: Digest, value: T) -> Node
     where
         T: Into<Vec<u8>>,
@@ -174,6 +203,7 @@ impl Node {
         }
     }
 
+    /// Create a new internal node
     pub fn new_internal_node(left: Node, right: Node) -> Node {
         Node::Internal {
             index: 0,
@@ -184,13 +214,34 @@ impl Node {
         }
     }
 
-    #[allow(dead_code)]
+    /// Make the node boxed
     pub fn into_boxed(self) -> Box<Node> {
         Box::new(self)
     }
 
+    /// Encode the position with an additional flag when persisting the node so we
+    /// can determine the type of node when decoding raw bits.
+    fn tag_pos_for_leaf_or_internal(pos: u32, is_leaf: bool) -> u32 {
+        if is_leaf {
+            return pos * 2 + 1;
+        } else {
+            return pos * 2;
+        }
+    }
+
+    /// Shapeshift the encoded pos to the true position and determine whether it's
+    /// a leaf or internal node.  Used when decoding the node. So the tree always
+    /// uses the true storage position
+    fn get_pos_tag(flagged_pos: u32) -> (u32, u8) {
+        let is_leaf = (flagged_pos & 1) as u8;
+        let pos = flagged_pos >> 1;
+        return (pos, is_leaf);
+    }
+
+    /// Encode leaf or internal nodes for storage.
     pub fn encode(&self) -> io::Result<Vec<u8>> {
-        let mut writer = Vec::<u8>::with_capacity(1024);
+        // Make the writer the largest capacity (INTERNAL)
+        let mut writer = Vec::<u8>::with_capacity(INTERNAL_NODE_SIZE);
         match self {
             Node::Leaf {
                 key,
@@ -201,38 +252,40 @@ impl Node {
                 ..
             } => {
                 assert!(value.is_some(), "Leaf has no value!");
-                // Write the leaf flag
-                writer.write_u8(LEAF_PREFIX)?;
-
-                // Write Node
-                // leaf value index
+                // Write the leaf node with the actual value information
+                // leaf value file index
                 writer.write_u16::<LittleEndian>(*vindex)?;
-                // leaf value position
+                // leaf value file position
                 writer.write_u32::<LittleEndian>(*vpos)?;
-                // value size
+                // the value size
                 writer.write_u16::<LittleEndian>(*vsize)?;
-                // append key
+                // the value key
                 writer.extend_from_slice(&key.0);
 
                 Ok(writer)
             }
             Node::Internal { left, right, .. } => {
+                // Do the left node first...
+                // check to see if it's a leaf so we can encode it with the proper 'tag'
+                let is_left_leaf = left.is_leaf();
                 let (lindex, lpos) = left.get_index_position();
-                // Write the internal flag
-                writer.write_u8(INTERNAL_PREFIX)?;
+
                 // index of file
                 writer.write_u16::<LittleEndian>(lindex)?;
-                // pos
-                writer.write_u32::<LittleEndian>(lpos)?;
+                // pos - note the tagging
+                let left_pos = Node::tag_pos_for_leaf_or_internal(lpos, is_left_leaf);
+                writer.write_u32::<LittleEndian>(left_pos)?;
                 // hash
                 writer.extend_from_slice(&(left.hash()).0);
 
                 // Do right node
+                let is_right_leaf = right.is_leaf();
                 let (rindex, rpos) = right.get_index_position();
                 // index of file
                 writer.write_u16::<LittleEndian>(rindex)?;
                 // flags
-                writer.write_u32::<LittleEndian>(rpos)?;
+                let right_pos = Node::tag_pos_for_leaf_or_internal(rpos, is_right_leaf);
+                writer.write_u32::<LittleEndian>(right_pos)?;
                 // hash
                 writer.extend_from_slice(&(right.hash()).0);
 
@@ -242,97 +295,96 @@ impl Node {
         }
     }
 
-    pub fn decode(mut bits: Vec<u8>) -> io::Result<Node> {
-        let ntype = bits.remove(0);
-        match ntype {
-            LEAF_PREFIX => {
-                // Split off the key
-                let k = bits.split_off(8);
-                // Read stuff
-                let mut rdr = Cursor::new(bits);
-                let vindex = rdr.read_u16::<LittleEndian>()?;
-                let vpos = rdr.read_u32::<LittleEndian>()?;
-                let vsize = rdr.read_u16::<LittleEndian>()?;
+    /// Decode bits from storage into the respective node.  Internal nodes contain
+    /// hash nodes for the respective left and right nodes so we can properly navigate
+    /// the tree.
+    pub fn decode(mut bits: Vec<u8>, is_leaf: bool) -> io::Result<Node> {
+        if is_leaf {
+            assert_eq!(bits.len(), 40, "Decode: don't have enough bits for a leaf");
 
-                // Extract the key
-                assert!(k.len() == 32);
-                let mut keybits: [u8; 32] = Default::default();
-                keybits.copy_from_slice(&k);
+            // Grab the key from the end. We start at 8 as that's the end of the header
+            // information.
+            let k = bits.split_off(8);
+            // Read the header information
+            let mut rdr = Cursor::new(bits);
+            let vindex = rdr.read_u16::<LittleEndian>()?;
+            let vpos = rdr.read_u32::<LittleEndian>()?;
+            let vsize = rdr.read_u16::<LittleEndian>()?;
 
-                Ok(Node::Leaf {
-                    pos: 0,
-                    index: 0,
-                    hash: Digest::default(),
-                    key: Digest(keybits),
-                    value: None,
-                    vindex,
-                    vpos,
-                    vsize,
-                })
-            }
-            INTERNAL_PREFIX => {
-                let mut offset = 0;
-                let left_index = LittleEndian::read_u16(&bits[offset..]);
-                offset += 2;
+            // Extract the key
+            assert!(k.len() == 32);
+            let mut keybits: [u8; 32] = Default::default();
+            keybits.copy_from_slice(&k);
 
-                let leftnode = if left_index != 0 {
-                    let left_pos = LittleEndian::read_u32(&bits[offset..]);
-                    offset += 4;
-                    let left_hash = &bits[offset..offset + 32];
-                    offset += 32;
-                    // add hashnode to left
-                    Node::Hash {
-                        pos: left_pos,
-                        index: left_index,
-                        hash: Digest::from(left_hash),
-                    }
-                } else {
-                    offset += 4 + 32;
-                    Node::Empty {}
-                };
+            Ok(Node::Leaf {
+                pos: 0,
+                index: 0,
+                hash: Digest::default(),
+                key: Digest(keybits),
+                value: None,
+                vindex,
+                vpos,
+                vsize,
+            })
+        } else {
+            assert_eq!(
+                bits.len(),
+                76,
+                "Decode: don't have enough bits for an internal node"
+            );
 
-                let right_index = LittleEndian::read_u16(&bits[offset..]);
-                offset += 2;
+            let mut offset = 0;
+            let left_index = LittleEndian::read_u16(&bits[offset..]);
+            offset += 2;
 
-                let rightnode = if right_index != 0 {
-                    let right_pos = LittleEndian::read_u32(&bits[offset..]);
-                    offset += 4;
-                    let right_hash = &bits[offset..offset + 32];
+            let leftnode = if left_index != 0 {
+                let left_pos = LittleEndian::read_u32(&bits[offset..]);
+                let (lpos, left_leaf_flag) = Node::get_pos_tag(left_pos);
+                offset += 4;
+                let left_hash = &bits[offset..offset + 32];
+                offset += 32;
 
-                    Node::Hash {
-                        pos: right_pos,
-                        index: right_index,
-                        hash: Digest::from(right_hash),
-                    }
-                } else {
-                    Node::Empty {}
-                };
+                // add hashnode to left
+                Node::Hash {
+                    pos: lpos,
+                    index: left_index,
+                    hash: Digest::from(left_hash),
+                    is_leaf: left_leaf_flag,
+                }
+            } else {
+                offset += 4 + 32;
+                Node::Empty {}
+            };
 
-                Ok(Node::Internal {
-                    pos: 0,
-                    index: 0,
-                    hash: Digest::default(),
-                    left: Box::new(leftnode),
-                    right: Box::new(rightnode),
-                })
-            }
-            _ => Err(Error::new(ErrorKind::Other, "Only decode leaf/internal")),
+            let right_index = LittleEndian::read_u16(&bits[offset..]);
+            offset += 2;
+
+            let rightnode = if right_index != 0 {
+                let right_pos = LittleEndian::read_u32(&bits[offset..]);
+                let (rpos, right_leaf_flag) = Node::get_pos_tag(right_pos);
+                offset += 4;
+                let right_hash = &bits[offset..offset + 32];
+
+                Node::Hash {
+                    pos: rpos,
+                    index: right_index,
+                    hash: Digest::from(right_hash),
+                    is_leaf: right_leaf_flag,
+                }
+            } else {
+                Node::Empty {}
+            };
+
+            Ok(Node::Internal {
+                pos: 0,
+                index: 0,
+                hash: Digest::default(),
+                left: Box::new(leftnode),
+                right: Box::new(rightnode),
+            })
         }
     }
 }
-
-/*impl fmt::Debug for Node {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Node::Empty {} => write!(f, "Node::Empty"),
-            Node::Leaf { hash, .. } => write!(f, "Node:Leaf({:x})", hash),
-            Node::Internal { left, right, .. } => {
-                write!(f, "Node:Internal({:x}, {:x})", left.hash(), right.hash())
-            }
-            Node::Hash { hash, .. } => write!(f, "Node::Hash({:x})", hash),
-        }
-    }
-}*/
 
 #[cfg(test)]
 mod tests {
@@ -358,7 +410,7 @@ mod tests {
         let bits = leaf.encode();
         assert!(bits.is_ok());
 
-        let back = Node::decode(bits.unwrap());
+        let back = Node::decode(bits.unwrap(), true);
         assert!(back.is_ok());
 
         let r = match back.unwrap() {
@@ -389,7 +441,7 @@ mod tests {
         let ibits = internal.encode();
         assert!(ibits.is_ok());
 
-        let iback = Node::decode(ibits.unwrap());
+        let iback = Node::decode(ibits.unwrap(), false);
         assert!(iback.is_ok());
 
         let r1 = match iback.unwrap() {

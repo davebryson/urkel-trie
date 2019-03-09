@@ -1,6 +1,8 @@
-use super::{INTERNAL_PREFIX, LEAF_PREFIX};
 use blake2_rfc::blake2b::Blake2b;
 use std::fmt;
+
+const LEAF_PREFIX: u8 = 0x00u8;
+const INTERNAL_PREFIX: u8 = 0x01u8;
 
 #[derive(Eq, PartialEq, PartialOrd, Clone, Copy)]
 pub struct Digest(pub [u8; 32]);
