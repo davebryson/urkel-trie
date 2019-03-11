@@ -34,6 +34,7 @@ impl Meta {
     pub fn open(dir: &str, file_id: u16) -> Result<Meta> {
         let logfilename = get_log_filename(dir, file_id);
         let mut file = get_file(&logfilename, false)?;
+
         let mut file_size: u64 = 0;
         if let Ok(m) = file.metadata() {
             file_size = m.len();
@@ -51,7 +52,6 @@ impl Meta {
         }
 
         let mut start_pos: i64 = (file_size - (file_size % META_ENTRY_SIZE)) as i64;
-
         loop {
             start_pos -= META_ENTRY_SIZE as i64;
             if start_pos <= 0 {
@@ -59,7 +59,9 @@ impl Meta {
             }
 
             let mut buffer = vec![0; META_ENTRY_SIZE as usize];
-            file.seek(SeekFrom::End(-start_pos))?;
+            // From the start of the file, jump to our offset (startpos)
+            // then continue to walk backwards
+            file.seek(SeekFrom::Start(start_pos as u64))?;
             file.read_exact(&mut buffer)?;
 
             let mut rdr = Cursor::new(buffer);
@@ -77,7 +79,7 @@ impl Meta {
                     index: meta_index,
                     pos: meta_pos,
                     root_index,
-                    root_pos: root_pos, //adj_root_pos,
+                    root_pos: adj_root_pos,
                     is_leaf,
                 });
             }
@@ -91,9 +93,6 @@ impl Meta {
         } else {
             self.root_pos * 2
         };
-
-        println!("Meta encoding root pos @ {:?}", flagged_rpos);
-
         let mut wtr = Vec::<u8>::with_capacity(META_ENTRY_SIZE as usize);
         wtr.write_u32::<LittleEndian>(META_MAGIC)?;
         wtr.write_u16::<LittleEndian>(self.index)?;
@@ -104,7 +103,6 @@ impl Meta {
     }
 }
 
-// TODO: Use the current StoreFile for index
 pub struct Store<'a> {
     dir: &'a Path, // was pathbuf
     logfiles: Vec<u16>,
@@ -112,6 +110,14 @@ pub struct Store<'a> {
     file: File,
     pos: u32,
     buf: Vec<u8>, // Temp
+}
+
+impl<'a> Drop for Store<'a> {
+    fn drop(&mut self) {
+        println!("Dropping Store!");
+        self.file.flush().unwrap();
+        self.file.sync_all().unwrap();
+    }
 }
 
 fn maybe_create_dir(dir: &str) {
@@ -172,7 +178,6 @@ impl<'a> Store<'a> {
     // return the index, pos of the node to the tree
     pub fn write_node(&mut self, data: Vec<u8>) -> io::Result<(u16, u32)> {
         self.buf.write(data.as_slice()).and_then(|num_bits| {
-            println!("write node");
             // Record the starting position
             let write_pos = self.pos;
             // Increment the pos by the number of bits written
@@ -233,7 +238,6 @@ impl<'a> Store<'a> {
     /// to the end of the file, and eventually, rotate to the next index file if it's
     /// larger than the max filesize setting
     pub fn commit(&mut self, root_index: u16, root_pos: u32, is_leaf: bool) -> io::Result<()> {
-        println!("Commit...");
         // Write out the current buffer
         self.file.write_all(&self.buf[..])?;
 
@@ -254,7 +258,6 @@ impl<'a> Store<'a> {
             .and_then(|encoded| self.file.write_all(encoded.as_slice()))?;
         self.pos += META_ENTRY_SIZE as u32;
 
-        println!("wrote meta");
         self.file.flush()?;
         self.file.sync_all()?;
         self.buf.clear();

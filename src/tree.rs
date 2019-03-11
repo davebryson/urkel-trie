@@ -274,6 +274,7 @@ impl<'db> UrkelTree<'db> {
         let mut current = self.root.clone().unwrap();
         loop {
             match *current {
+                Node::Empty {} => break,
                 Node::Leaf { key, value, .. } => {
                     if hashed_key == key {
                         proof.proof_type = ProofType::Exists;
@@ -298,16 +299,22 @@ impl<'db> UrkelTree<'db> {
                     }
                     depth += 1;
                 }
+                Node::Hash {
+                    index, pos, hash, ..
+                } => {
+                    if let Ok(mut hn) = self.store.get_node(index, pos, current.is_leaf()) {
+                        hn.set_hash(hash);
+                        current = hn.into_boxed();
+                    }
+                }
                 _ => break,
             }
         }
-
         proof
     }
 
     pub fn commit(&mut self) {
         // Commit the nodes and set a new root
-
         if let Some(r) = self.root.take().map(|n| self.write_to_store(n)) {
             let (i, p) = r.get_index_position();
             let is_leaf = r.is_leaf();
@@ -315,20 +322,6 @@ impl<'db> UrkelTree<'db> {
             println!("new root is {:?}", r);
             self.root = Some(r);
         }
-        //self.root = self.root.take().map(|n| self.write_to_store(n));
-        //let (i, p) = self.root.get_index_position();
-        //let is_leaf = self.root.is_leaf();
-        //self.store.commit(i, p, is_leaf).expect("Commit failed");
-        /*self.root = self
-        .root
-        .take()
-        .map(|n| self.write_to_store(n))
-        .map(|new_root| {
-            let (i, p) = new_root.get_index_position();
-            let is_leaf = new_root.is_leaf();
-            self.store.commit(i, p, is_leaf).expect("Commit failed");
-            new_root
-        });*/
     }
 
     fn write_to_store(&mut self, root: Box<Node>) -> Box<Node> {
@@ -352,15 +345,10 @@ impl<'db> UrkelTree<'db> {
                 };
 
                 if index == 0 {
-                    // Write to store...
-                    //nn.encode().and_then(|bits| {
-                    //  self.store.write_node(bits).and_then(|(i,p)| nn.set_index_position(i, p))
-                    //);
-
                     let encoded = nn.encode().unwrap();
                     let (i, p) = self.store.write_node(encoded).unwrap();
                     nn.set_index_position(i, p);
-                    println!("write to store internal @ {} {}", i, p);
+                    //println!("write to store internal @ {} {}", i, p);
                 }
 
                 return nn.into_hash_node().into_boxed();
@@ -374,24 +362,18 @@ impl<'db> UrkelTree<'db> {
                 if index == 0 && value.is_some() {
                     let v = value.clone();
                     let v1 = value.clone();
-                    //let v2 = value.clone();
 
-                    //println!("Trying to write leaf: {:?}", key);
                     let mut l = Node::new_leaf_node(key, v.unwrap());
-                    //l.set_index_position(index, pos);
 
                     let (v_i, v_p) = self.store.write_value(v1.unwrap().as_ref()).unwrap();
                     l.set_value_index_position(v_i, v_p);
-                    //println!("write to store leaf value @ {} {}", v_i, v_p);
 
                     let encoded = l.encode().unwrap();
                     let (i, p) = self.store.write_node(encoded).unwrap();
                     l.set_index_position(i, p);
-                    //println!("write to store leaf @ {} {}", i, p);
 
                     return l.into_hash_node().into_boxed();
                 }
-
                 return root.into_hash_node().into_boxed();
             }
             Node::Hash { .. } => {

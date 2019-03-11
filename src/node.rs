@@ -3,8 +3,11 @@ use byteorder::{ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io;
 use std::io::{Cursor, Error, ErrorKind};
 
-pub const INTERNAL_NODE_SIZE: usize = 76;
-pub const LEAF_NODE_SIZE: usize = 40;
+pub const LEAF_NODE_SIZE: usize = 41;
+pub const INTERNAL_NODE_SIZE: usize = 78;
+
+const LEAF_NODE_FLAG: u8 = 1u8;
+const INTERNAL_NODE_FLAG: u8 = 0u8;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Node {
@@ -219,23 +222,12 @@ impl Node {
         Box::new(self)
     }
 
-    /// Encode the position with an additional flag when persisting the node so we
-    /// can determine the type of node when decoding raw bits.
-    fn tag_pos_for_leaf_or_internal(pos: u32, is_leaf: bool) -> u32 {
-        if is_leaf {
-            return pos * 2 + 1;
+    fn get_node_type(leafflag: bool) -> u8 {
+        if leafflag {
+            LEAF_NODE_FLAG
         } else {
-            return pos * 2;
+            INTERNAL_NODE_FLAG
         }
-    }
-
-    /// Shapeshift the encoded pos to the true position and determine whether it's
-    /// a leaf or internal node.  Used when decoding the node. So the tree always
-    /// uses the true storage position
-    fn get_pos_tag(flagged_pos: u32) -> (u32, u8) {
-        let is_leaf = (flagged_pos & 1) as u8;
-        let pos = flagged_pos >> 1;
-        return (pos, is_leaf);
     }
 
     /// Encode a leaf or internal node for storage.
@@ -268,7 +260,10 @@ impl Node {
                 ..
             } => {
                 assert!(value.is_some(), "Leaf has no value!");
-                // Write the leaf node with the actual value information
+                // Write the leaf node with the actual value information:
+
+                // Leaf flag marker
+                writer.write_u8(LEAF_NODE_FLAG)?;
                 // leaf value file index
                 writer.write_u16::<LittleEndian>(*vindex)?;
                 // leaf value file position
@@ -283,25 +278,28 @@ impl Node {
             Node::Internal { left, right, .. } => {
                 // Do the left node first...
                 // check to see if it's a leaf so we can encode it with the proper 'tag'
-                let is_left_leaf = left.is_leaf();
                 let (lindex, lpos) = left.get_index_position();
+                let left_flag = Node::get_node_type(left.is_leaf());
 
+                // Write left node type
+                writer.write_u8(left_flag)?;
                 // index of file
                 writer.write_u16::<LittleEndian>(lindex)?;
                 // pos - note the tagging
-                let left_pos = Node::tag_pos_for_leaf_or_internal(lpos, is_left_leaf);
-                writer.write_u32::<LittleEndian>(left_pos)?;
+                writer.write_u32::<LittleEndian>(lpos)?;
                 // hash
                 writer.extend_from_slice(&(left.hash()).0);
 
-                // Do right node
-                let is_right_leaf = right.is_leaf();
+                // right node
                 let (rindex, rpos) = right.get_index_position();
+                let right_flag = Node::get_node_type(right.is_leaf());
+
+                // Write right node type
+                writer.write_u8(right_flag)?;
                 // index of file
                 writer.write_u16::<LittleEndian>(rindex)?;
                 // flags
-                let right_pos = Node::tag_pos_for_leaf_or_internal(rpos, is_right_leaf);
-                writer.write_u32::<LittleEndian>(right_pos)?;
+                writer.write_u32::<LittleEndian>(rpos)?;
                 // hash
                 writer.extend_from_slice(&(right.hash()).0);
 
@@ -324,9 +322,15 @@ impl Node {
 
             // Grab the key from the end. We start at 8 as that's the end of the header
             // information.
-            let k = bits.split_off(8);
+            let k = bits.split_off(9);
             // Read the header information
             let mut rdr = Cursor::new(bits);
+            let flag = rdr.read_u8()?;
+            assert_eq!(
+                LEAF_NODE_FLAG, flag,
+                "Decoded leaf has wrong node type flag"
+            );
+
             let vindex = rdr.read_u16::<LittleEndian>()?;
             let vpos = rdr.read_u32::<LittleEndian>()?;
             let vsize = rdr.read_u16::<LittleEndian>()?;
@@ -353,43 +357,47 @@ impl Node {
                 "Decode: don't have enough bits for an internal node"
             );
 
+            // Parse internal node
             let mut offset = 0;
+            let left_node_type = &bits[offset];
+            offset += 1;
+
             let left_index = LittleEndian::read_u16(&bits[offset..]);
             offset += 2;
 
             let leftnode = if left_index != 0 {
                 let left_pos = LittleEndian::read_u32(&bits[offset..]);
-                let (lpos, left_leaf_flag) = Node::get_pos_tag(left_pos);
                 offset += 4;
                 let left_hash = &bits[offset..offset + 32];
                 offset += 32;
 
                 // add hashnode to left
                 Node::Hash {
-                    pos: lpos,
+                    pos: left_pos,
                     index: left_index,
                     hash: Digest::from(left_hash),
-                    is_leaf: left_leaf_flag,
+                    is_leaf: *left_node_type,
                 }
             } else {
                 offset += 4 + 32;
                 Node::Empty {}
             };
 
+            let right_node_type = &bits[offset];
+            offset += 1;
             let right_index = LittleEndian::read_u16(&bits[offset..]);
             offset += 2;
 
             let rightnode = if right_index != 0 {
                 let right_pos = LittleEndian::read_u32(&bits[offset..]);
-                let (rpos, right_leaf_flag) = Node::get_pos_tag(right_pos);
                 offset += 4;
                 let right_hash = &bits[offset..offset + 32];
 
                 Node::Hash {
-                    pos: rpos,
+                    pos: right_pos,
                     index: right_index,
                     hash: Digest::from(right_hash),
-                    is_leaf: right_leaf_flag,
+                    is_leaf: *right_node_type,
                 }
             } else {
                 Node::Empty {}
