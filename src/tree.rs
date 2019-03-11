@@ -4,21 +4,33 @@ use super::hasher::{hash, hash_leaf_value, Digest};
 use super::node::Node;
 use super::proof::{Proof, ProofType};
 use super::KEY_SIZE;
+use std::sync::Arc;
 //use log::{info, trace, warn};
 
 //#[derive(Clone)]
-pub struct UrkelTree {
+pub struct UrkelTree<'db> {
     root: Option<Box<Node>>,
-    store: Store,
+    store: Store<'db>,
 }
 
-impl UrkelTree {
-    // TODO: pass dir here
-    pub fn new() -> Self {
-        let s = Store::open("data").unwrap();
-        UrkelTree {
-            root: Some(Box::new(Node::Empty {})),
-            store: s,
+impl<'db> UrkelTree<'db> {
+    pub fn new(dir: &'db str) -> Self {
+        let s = Store::open(dir).expect("Failed to open store");
+        match s.get_root_node() {
+            Ok(root) => {
+                println!("loaded root");
+                UrkelTree {
+                    root: Some(Box::new(root)),
+                    store: s,
+                }
+            }
+            Err(_) => {
+                println!("returning Empty root");
+                UrkelTree {
+                    root: Some(Box::new(Node::Empty {})),
+                    store: s,
+                }
+            }
         }
     }
 
@@ -44,7 +56,6 @@ impl UrkelTree {
                 Node::Hash {
                     index, pos, hash, ..
                 } => {
-                    println!("insert hash node");
                     // Get the node from store
                     //if let Ok(mut hn) = self.store.get_node(index, pos, root.is_leaf()) {
                     //    hn.set_hash(hash);
@@ -167,10 +178,8 @@ impl UrkelTree {
                 }
                 Node::Internal { left, right, .. } => {
                     if has_bit(&nkey, depth) {
-                        println!("go right");
                         current = right;
                     } else {
-                        println!("go left");
                         current = left;
                     }
                     depth += 1;
@@ -303,7 +312,7 @@ impl UrkelTree {
             let (i, p) = r.get_index_position();
             let is_leaf = r.is_leaf();
             self.store.commit(i, p, is_leaf).expect("Commit failed");
-            println!("Set new root");
+            println!("new root is {:?}", r);
             self.root = Some(r);
         }
         //self.root = self.root.take().map(|n| self.write_to_store(n));
@@ -342,7 +351,6 @@ impl UrkelTree {
                     hash: Digest::default(),
                 };
 
-                println!("loop");
                 if index == 0 {
                     // Write to store...
                     //nn.encode().and_then(|bits| {
@@ -359,12 +367,10 @@ impl UrkelTree {
             }
             Node::Leaf {
                 index,
-                pos,
                 key,
                 ref value,
                 ..
             } => {
-                println!("leaf loop");
                 if index == 0 && value.is_some() {
                     let v = value.clone();
                     let v1 = value.clone();
@@ -381,7 +387,7 @@ impl UrkelTree {
                     let encoded = l.encode().unwrap();
                     let (i, p) = self.store.write_node(encoded).unwrap();
                     l.set_index_position(i, p);
-                    println!("write to store leaf @ {} {}", i, p);
+                    //println!("write to store leaf @ {} {}", i, p);
 
                     return l.into_hash_node().into_boxed();
                 }

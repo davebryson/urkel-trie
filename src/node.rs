@@ -10,8 +10,8 @@ pub const LEAF_NODE_SIZE: usize = 40;
 pub enum Node {
     /// Sentinal node
     Empty {},
-    /// Compact representation of a leaf/internal node used in storage
-    /// the is_leaf flag is set during encoding/decoding
+    /// Compact representation of a leaf/internal node used in storage.
+    /// The is_leaf flag is set during encoding/decoding (not persisted)
     Hash {
         index: u16,
         pos: u32,
@@ -238,7 +238,23 @@ impl Node {
         return (pos, is_leaf);
     }
 
-    /// Encode leaf or internal nodes for storage.
+    /// Encode a leaf or internal node for storage.
+    /// New Format.  Each node starts with an u8 marking whether it's a leaf or internal node.
+    /// 0 = leaf, 1 = internal
+    /// Leaf: (41 bytes total)
+    ///  - u8 (1)    - flag marking it a leaf/internal
+    ///  - u16 (2)  - value file index
+    ///  - u32 (4)  - value position
+    ///  - u16 (2)  - value size
+    ///  - (32)     - key hash
+    ///
+    /// Internal: (78 bytes total)
+    /// Left Node:
+    ///  - u8 (1)  - flag marking it a leaf /internal
+    ///  - u16 (2)  - file index
+    ///  - u32 (4)  - file position
+    ///  - (32)     - hash
+    /// Right Node (same as above)
     pub fn encode(&self) -> io::Result<Vec<u8>> {
         // Make the writer the largest capacity (INTERNAL)
         let mut writer = Vec::<u8>::with_capacity(INTERNAL_NODE_SIZE);
@@ -300,7 +316,11 @@ impl Node {
     /// the tree.
     pub fn decode(mut bits: Vec<u8>, is_leaf: bool) -> io::Result<Node> {
         if is_leaf {
-            assert_eq!(bits.len(), 40, "Decode: don't have enough bits for a leaf");
+            assert_eq!(
+                bits.len(),
+                LEAF_NODE_SIZE,
+                "Decode: don't have enough bits for a leaf"
+            );
 
             // Grab the key from the end. We start at 8 as that's the end of the header
             // information.
@@ -329,7 +349,7 @@ impl Node {
         } else {
             assert_eq!(
                 bits.len(),
-                76,
+                INTERNAL_NODE_SIZE,
                 "Decode: don't have enough bits for an internal node"
             );
 

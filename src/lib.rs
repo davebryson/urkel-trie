@@ -6,6 +6,7 @@ extern crate byteorder;
 extern crate log;
 
 mod db;
+mod errors;
 mod hasher;
 mod node;
 mod proof;
@@ -26,17 +27,19 @@ pub fn has_bit(key: &Digest, index: usize) -> bool {
     }
 }
 
+pub trait UrkelStore: Send + Sync {}
+
 // --- Tests --- /
 #[cfg(test)]
 mod tests {
-    use crate::db::Store;
+    //use crate::db::Store;
     use crate::hasher::Digest;
     use crate::proof::ProofType;
     use crate::tree::UrkelTree;
 
     #[test]
     fn test_inmemory_tree() {
-        let mut tree = UrkelTree::new();
+        let mut tree = UrkelTree::new("data");
         tree.insert(b"name-1", "value-1");
         tree.insert(b"name-2", "value-2");
         let root = tree.get_root();
@@ -64,7 +67,7 @@ mod tests {
 
     #[test]
     fn test_many_entries() {
-        let mut tree = UrkelTree::new();
+        let mut tree = UrkelTree::new("data");
         for i in 1..10000 {
             tree.insert(format!("name-{}", i).as_bytes(), format!("value-{}", i));
         }
@@ -82,33 +85,39 @@ mod tests {
     #[test]
     fn test_tree_commit() {
         use std::fs;
-        let mut tree = UrkelTree::new();
-        tree.insert(b"name-1", "value-1");
-        tree.insert(b"name-2", "value-2");
-        tree.insert(b"name-3", "value-3");
-        tree.insert(b"name-4", "value-4");
-        println!("Wrote 4");
-        // NOTE: Fails if you commit here...??
-        tree.commit();
+        {
+            let mut tree = UrkelTree::new("data");
+            tree.insert(b"name-1", "value-1");
+            tree.insert(b"name-2", "value-2");
+            tree.insert(b"name-3", "value-3");
+            tree.insert(b"name-4", "value-4");
+            tree.commit();
 
-        //tree.insert(b"name-3", "value-3");
-        //tree.commit();
+            //tree.insert(b"name-3", "value-3");
+            //tree.commit();
 
-        //assert_eq!(tree.get(b"name-1"), Some(Vec::from("value-1")));
-        //assert_eq!(tree.get(b"name-3"), Some(Vec::from("value-3")));
+            assert_eq!(tree.get(b"name-1"), Some(Vec::from("value-1")));
+            assert_eq!(tree.get(b"name-3"), Some(Vec::from("value-3")));
 
-        tree.insert(b"name-5", "value-5");
-        tree.insert(b"name-6", "value-6");
-        println!("Wrote 5");
-        tree.commit();
-        //tree.commit();
+            tree.insert(b"name-5", "value-5");
+            tree.insert(b"name-6", "value-6");
+            tree.commit();
 
-        println!("do gets...");
-        assert_eq!(tree.get(b"name-1"), Some(Vec::from("value-1")));
-        assert_eq!(tree.get(b"name-5"), Some(Vec::from("value-5")));
-        assert_ne!(Digest::zero(), tree.get_root());
+            assert_eq!(tree.get(b"name-1"), Some(Vec::from("value-1")));
+            assert_eq!(tree.get(b"name-5"), Some(Vec::from("value-5")));
 
-        fs::remove_file("data/0000000001").expect("Should have deleted test file");
+            let last_root = tree.get_root();
+            println!("Last root {:?}", last_root);
+            assert_ne!(Digest::zero(), last_root);
+        }
+
+        {
+            let tree = UrkelTree::new("data");
+            println!("current root {:?}", tree.get_root());
+            assert_eq!(tree.get(b"name-1"), Some(Vec::from("value-1")));
+            assert_eq!(tree.get(b"name-5"), Some(Vec::from("value-5")));
+        }
+
+        //fs::remove_file("data/0000000001").expect("Should have deleted test file");
     }
-
 }
