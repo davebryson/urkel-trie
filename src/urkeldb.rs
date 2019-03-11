@@ -1,5 +1,6 @@
-/*use super::errors::{Error, Result};
+use super::errors::{Error, Result};
 use super::node::{Node, INTERNAL_NODE_SIZE, LEAF_NODE_SIZE};
+use super::TreeStore;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
@@ -105,12 +106,12 @@ impl Meta {
 }
 
 pub struct Store<'a> {
-    dir: &'a Path, // was pathbuf
+    dir: &'a Path,
     logfiles: Vec<u16>,
     meta: Meta,
     file: File,
     pos: u32,
-    buf: Vec<u8>, // Temp
+    buf: Vec<u8>,
 }
 
 impl<'a> Drop for Store<'a> {
@@ -162,107 +163,99 @@ impl<'a> Store<'a> {
         })
     }
 
-    //fn get_log_filename(&self) -> PathBuf {
-    //   let file_id = format!("{:010}", self.meta.root_index);
-    //    self.dir.join(file_id)
-    //}
+    fn raw_read(&self, index: u16, pos: u32, size: usize) -> io::Result<Vec<u8>> {
+        let current_file = get_db_file_path(&self.dir, index);
+        let mut fs = get_file(&current_file, false)?;
+        fs.seek(SeekFrom::Start(pos as u64))?;
 
-    // Write encode node to the buffer, appending and incrementing the pos
-    // return the index, pos of the node to the tree
-    pub fn write_node(&mut self, data: Vec<u8>) -> io::Result<(u16, u32)> {
+        let mut packet = vec![0u8; size as usize];
+        fs.read(&mut packet[..])?;
+
+        Ok(packet)
+    }
+
+    fn read_node(&self, index: u16, pos: u32, is_leaf: bool) -> io::Result<Node> {
+        let packet_size = if is_leaf {
+            LEAF_NODE_SIZE
+        } else {
+            INTERNAL_NODE_SIZE
+        };
+
+        self.raw_read(index, pos, packet_size)
+            .and_then(|bits| Node::decode(bits, is_leaf))
+    }
+
+    fn write_to_buffer(&mut self, data: &Vec<u8>) -> io::Result<u32> {
         self.buf.write(data.as_slice()).and_then(|num_bits| {
             // Record the starting position
             let write_pos = self.pos;
             // Increment the pos by the number of bits written
             self.pos += num_bits as u32;
-            Ok((self.meta.root_index, write_pos))
+            Ok(write_pos)
         })
     }
+}
 
-    // Write a value called before writing the leaf node
-    pub fn write_value(&mut self, data: &Vec<u8>) -> io::Result<(u16, u32)> {
-        self.buf.write(data.as_slice()).and_then(|bits| {
-            let write_pos = self.pos;
-            self.pos += bits as u32;
-            Ok((self.meta.root_index, write_pos))
-        })
+impl<'a> TreeStore for Store<'a> {
+    /// Write a node to storage. Returns the node transformed into boxed hash node
+    fn save(&mut self, mut node: Node) -> Box<Node> {
+        match node {
+            Node::Leaf { ref value, .. } => {
+                let index = self.meta.index;
+                // Write value first
+                let val_pos = self
+                    .write_to_buffer(value.clone().unwrap().as_ref())
+                    .expect("Failed to get node position on write");
+                node.update_value_storage_location(index, val_pos);
+
+                // Now write the node
+                let nod_pos = node
+                    .encode()
+                    .and_then(|b| self.write_to_buffer(&b))
+                    .expect("Failed to get node position on write");
+                node.update_storage_location(index, nod_pos);
+                node.into_hash_node().into_boxed()
+            }
+            Node::Internal { .. } => {
+                let pos = node
+                    .encode()
+                    .and_then(|b| self.write_to_buffer(&b))
+                    .expect("Failed to get node position on write");
+                node.update_storage_location(self.meta.index, pos);
+                node.into_hash_node().into_boxed()
+            }
+            _ => panic!("Can only 'put' leaf/internal nodes"),
+        }
     }
 
-    // Read value from file
-    pub fn get_value(&self, vindex: u16, vpos: u32, vsize: u16) -> io::Result<Vec<u8>> {
-        let current_file = get_db_file_path(&self.dir, vindex);
-        let mut fs = get_file(&current_file, false)?;
-        fs.seek(SeekFrom::Start(vpos as u64))?;
-
-        let mut buf = vec![0u8; vsize as usize];
-        fs.read_exact(&mut buf[..])?;
-        Ok(buf)
+    /// Get a leaf value
+    fn get(&self, vindex: u16, vpos: u32, vsize: u16) -> Option<Vec<u8>> {
+        match self.raw_read(vindex, vpos, vsize as usize) {
+            Ok(val) => Some(val),
+            _ => None,
+        }
     }
 
-    // Get the last committed root node from the meta information.
-    pub fn get_root_node(&self) -> io::Result<Node> {
-        println!("get root node @ {:?}", self.meta.root_pos);
-        self.get_node(self.meta.root_index, self.meta.root_pos, self.meta.is_leaf)
-            .and_then(|mut nn| {
-                nn.update_storage_location(self.meta.root_index, self.meta.root_pos);
-                println!("Got root {:?}", nn);
-                Ok(nn.into_hash_node())
-            })
-    }
-
-    // Future code
-    /*pub fn resolve(&self, node: Box<Node>) -> Box<Node> {
-        let (index, pos) = node.get_index_position();
+    // Consumes a hash node and returns a boxed leaf or internal node
+    fn resolve(&self, node: Node) -> Box<Node> {
+        let (index, pos) = node.get_storage_location();
         let is_leaf = node.is_leaf();
         self.read_node(index, pos, is_leaf)
-            .and_then(|n| {
-                n.set_hash(*node.hash);
+            .and_then(|mut n| {
+                n.update_data_value(node.get_data_value());
                 Ok(n.into_boxed())
             })
             .unwrap()
     }
 
-    fn read_node(&self, index: u16, pos: u32, is_leaf: bool) -> io::Result<Node> {
-        let current_file = get_db_file_path(&self.dir, index);
-        let mut fs = get_file(&current_file, false)?;
-        fs.seek(SeekFrom::Start(pos as u64))?;
+    fn commit(&mut self, root: Box<Node>) -> io::Result<(Box<Node>)> {
+        let (root_index, root_pos) = root.get_storage_location();
+        let is_leaf = root.is_leaf();
 
-        let packet_size = if is_leaf {
-            LEAF_NODE_SIZE
-        } else {
-            INTERNAL_NODE_SIZE
-        };
-
-        let mut packet = vec![0u8; packet_size];
-        fs.read(&mut packet[..])?;
-        Node::decode(packet, is_leaf)
-    }*/
-
-    // Read node: used in tree calls to resolve a Hash::
-    pub fn get_node(&self, index: u16, pos: u32, is_leaf: bool) -> io::Result<Node> {
-        let current_file = get_db_file_path(&self.dir, index);
-        //println!("Trying to get file @ {:?}", current_file);
-        let mut fs = get_file(&current_file, false)?;
-        fs.seek(SeekFrom::Start(pos as u64))?;
-
-        let packet_size = if is_leaf {
-            LEAF_NODE_SIZE
-        } else {
-            INTERNAL_NODE_SIZE
-        };
-
-        let mut packet = vec![0u8; packet_size];
-        fs.read(&mut packet[..])?;
-        Node::decode(packet, is_leaf)
-    }
-
-    /// Commit the buffer to file and update the meta root to the latest, the store.pos
-    /// to the end of the file, and eventually, rotate to the next index file if it's
-    /// larger than the max filesize setting
-    pub fn commit(&mut self, root_index: u16, root_pos: u32, is_leaf: bool) -> io::Result<()> {
-        // Write out the current buffer
+        // Dump all buffered write to file
         self.file.write_all(&self.buf[..])?;
 
+        // Do meta
         // Adding padding boundaries to the meta if needed
         let pad_size = META_ENTRY_SIZE - (self.pos as u64 % META_ENTRY_SIZE);
         let padding = vec![0; pad_size as usize];
@@ -280,10 +273,24 @@ impl<'a> Store<'a> {
             .and_then(|encoded| self.file.write_all(encoded.as_slice()))?;
         self.pos += META_ENTRY_SIZE as u32;
 
+        // Flush
         self.file.flush()?;
         self.file.sync_all()?;
         self.buf.clear();
-        Ok(())
+        Ok(root)
+    }
+
+    fn get_root(&self) -> io::Result<Box<Node>> {
+        let index = self.meta.root_index;
+        let pos = self.meta.root_pos;
+        let is_leaf = self.meta.is_leaf;
+
+        self.read_node(index, pos, is_leaf)
+            .and_then(|mut n| {
+                n.update_storage_location(index, pos);
+                Ok(n)
+            })
+            .and_then(|n| Ok(n.into_hash_node().into_boxed()))
     }
 }
 
@@ -349,4 +356,4 @@ pub fn get_file(path: &Path, write: bool) -> io::Result<File> {
 pub fn get_db_file_path(path: &Path, file_id: u16) -> PathBuf {
     let file_id = format!("{:010}", file_id);
     path.join(file_id)
-}*/
+}

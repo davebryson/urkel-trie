@@ -15,7 +15,7 @@ pub enum Node {
     Hash {
         index: u16,
         pos: u32,
-        hash: Digest,
+        data: Digest,
         is_leaf: u8,
     },
     /// Holds actual key/value along with positional information for both
@@ -23,7 +23,7 @@ pub enum Node {
     Leaf {
         index: u16,
         pos: u32,
-        hash: Digest,
+        data: Digest,
         key: Digest,
         value: Option<Vec<u8>>,
         vindex: u16,
@@ -34,19 +34,19 @@ pub enum Node {
     Internal {
         index: u16,
         pos: u32,
-        hash: Digest,
+        data: Digest,
         left: Box<Node>,
         right: Box<Node>,
     },
 }
 
 impl Node {
-    /// Calculate a hash for the given node
+    /// Calculate the hash of a given node
     pub fn hash(&self) -> Digest {
         match self {
             Node::Empty {} => Digest::zero(),
-            Node::Hash { hash, .. } => *hash,
-            Node::Leaf { hash, .. } => *hash,
+            Node::Hash { data, .. } => *data,
+            Node::Leaf { data, .. } => *data,
             Node::Internal {
                 ref left,
                 ref right,
@@ -60,35 +60,27 @@ impl Node {
     }
 
     // Used in resolve
-    /*pub fn update_hash(&mut self, node: Box<Node>) {
+    pub fn update_data_value(&mut self, h: Digest) {
         match self {
-            Node::Hash { ref mut hash, .. } => *hash = *node.hash,
-            Node::Leaf { ref mut hash, .. } => *hash = data,
-            Node::Internal { ref mut hash, .. } => *hash = data,
-            _ => unimplemented!(),
-        }
-    }*/
-
-    pub fn set_hash(&mut self, data: Digest) {
-        match self {
-            Node::Hash { ref mut hash, .. } => *hash = data,
-            Node::Leaf { ref mut hash, .. } => *hash = data,
-            Node::Internal { ref mut hash, .. } => *hash = data,
+            Node::Hash { ref mut data, .. } => *data = h,
+            Node::Leaf { ref mut data, .. } => *data = h,
+            Node::Internal { ref mut data, .. } => *data = h,
             _ => unimplemented!(),
         }
     }
 
-    /// Get the value of a leaf node
-    /*pub fn get_value(&self) -> Option<&Vec<u8>> {
+    pub fn get_data_value(&self) -> Digest {
         match self {
-            Node::Leaf { ref value, .. } => value.as_ref().map(|v| v),
-            _ => None,
+            Node::Leaf { data, .. } => *data,
+            Node::Internal { data, .. } => *data,
+            Node::Hash { data, .. } => *data,
+            Node::Empty {} => Digest::zero(),
         }
-    }*/
+    }
 
     /// Set the position of the actual leaf value and it's position
     /// in the leaf node. Used to update the node when writing to storage.
-    pub fn set_value_index_position(&mut self, i: u16, p: u32) {
+    pub fn update_value_storage_location(&mut self, i: u16, p: u32) {
         match self {
             Node::Leaf {
                 ref mut vindex,
@@ -102,22 +94,8 @@ impl Node {
         }
     }
 
-    /// Get information associated with the actual leaf value:
-    /// the file index, value pos, and value size
-    /* pub fn get_leaf_value_data(&self) -> (u16, u32, u16) {
-        match self {
-            Node::Leaf {
-                vindex,
-                vpos,
-                vsize,
-                ..
-            } => (*vindex, *vpos, *vsize),
-            _ => unimplemented!(),
-        }
-    }*/
-
-    /// Get the storage index and position of a given node
-    pub fn get_index_position(&self) -> (u16, u32) {
+    /// Return the position of the node in storage
+    pub fn get_storage_location(&self) -> (u16, u32) {
         match self {
             Node::Leaf { index, pos, .. } => (*index, *pos),
             Node::Internal { index, pos, .. } => (*index, *pos),
@@ -126,38 +104,8 @@ impl Node {
         }
     }
 
-    pub fn update_db_ptr(&mut self, i: u16, p: u32) {
-        match self {
-            Node::Leaf {
-                ref mut index,
-                ref mut pos,
-                ..
-            } => {
-                *index = i;
-                *pos = p;
-            }
-            Node::Internal {
-                ref mut index,
-                ref mut pos,
-                ..
-            } => {
-                *index = i;
-                *pos = p;
-            }
-            Node::Hash {
-                ref mut index,
-                ref mut pos,
-                ..
-            } => {
-                *index = i;
-                *pos = p;
-            }
-            _ => unimplemented!(),
-        }
-    }
-
-    /// Set the index and position for a given node.
-    pub fn set_index_position(&mut self, i: u16, p: u32) {
+    /// Update the position of the node in storage
+    pub fn update_storage_location(&mut self, i: u16, p: u32) {
         match self {
             Node::Leaf {
                 ref mut index,
@@ -193,13 +141,13 @@ impl Node {
             Node::Internal { index, pos, .. } => Node::Hash {
                 index,
                 pos,
-                hash: self.hash(),
+                data: self.hash(),
                 is_leaf: 0,
             },
             Node::Leaf { index, pos, .. } => Node::Hash {
                 index,
                 pos,
-                hash: self.hash(),
+                data: self.hash(),
                 is_leaf: 1,
             },
             _ => self,
@@ -215,7 +163,7 @@ impl Node {
         }
     }
 
-    /// Is the node and Empty (sentinal node)
+    /// Is the node an Empty (sentinal node)
     pub fn is_empty(&self) -> bool {
         match self {
             Node::Empty {} => true,
@@ -234,7 +182,7 @@ impl Node {
         Node::Leaf {
             index: 0,
             pos: 0,
-            hash: hash_leaf_value(key, v.as_slice()),
+            data: hash_leaf_value(key, v.as_slice()),
             key,
             value: Some(v),
             vindex: 0,
@@ -248,7 +196,7 @@ impl Node {
         Node::Internal {
             index: 0,
             pos: 0,
-            hash: Digest::default(),
+            data: Digest::default(),
             left: left.into_boxed(),
             right: right.into_boxed(),
         }
@@ -322,7 +270,7 @@ impl Node {
             Node::Internal { left, right, .. } => {
                 // Do the left node first...
                 // check to see if it's a leaf so we can encode it with the proper 'tag'
-                let (lindex, lpos) = left.get_index_position();
+                let (lindex, lpos) = left.get_storage_location();
                 let left_is_leaf = left.is_leaf();
 
                 // index of file
@@ -337,7 +285,7 @@ impl Node {
                 writer.extend_from_slice(&(left.hash()).0);
 
                 // right node
-                let (rindex, rpos) = right.get_index_position();
+                let (rindex, rpos) = right.get_storage_location();
                 //let right_flag = Node::get_node_type(right.is_leaf());
                 let right_is_leaf = right.is_leaf();
 
@@ -388,7 +336,7 @@ impl Node {
             Ok(Node::Leaf {
                 pos: 0,
                 index: 0,
-                hash: Digest::default(),
+                data: Digest::default(),
                 key: Digest(keybits),
                 value: None,
                 vindex,
@@ -424,7 +372,7 @@ impl Node {
                 Node::Hash {
                     pos: lpos,
                     index: left_index,
-                    hash: Digest::from(left_hash),
+                    data: Digest::from(left_hash),
                     is_leaf: left_leaf_flag,
                 }
             } else {
@@ -444,7 +392,7 @@ impl Node {
                 Node::Hash {
                     pos: rpos,
                     index: right_index,
-                    hash: Digest::from(right_hash),
+                    data: Digest::from(right_hash),
                     is_leaf: right_leaf_flag,
                 }
             } else {
@@ -454,7 +402,7 @@ impl Node {
             Ok(Node::Internal {
                 pos: 0,
                 index: 0,
-                hash: Digest::default(),
+                data: Digest::default(),
                 left: Box::new(leftnode),
                 right: Box::new(rightnode),
             })
@@ -476,7 +424,7 @@ mod tests {
         let leaf = Node::Leaf {
             index: 1,
             pos: 235,
-            hash: leaf_hash,
+            data: leaf_hash,
             key: k,
             value: Some(v),
             vindex: 1,
@@ -510,7 +458,7 @@ mod tests {
         let internal = Node::Internal {
             index: 0,
             pos: 0,
-            hash: Digest::default(),
+            data: Digest::default(),
             left: leaf.into_boxed(),
             right: Node::Empty {}.into_boxed(),
         };
@@ -522,7 +470,7 @@ mod tests {
 
         let r1 = match iback.unwrap() {
             Node::Internal { left, right, .. } => {
-                let (li, lp) = left.get_index_position();
+                let (li, lp) = left.get_storage_location();
                 assert_eq!(left.hash(), leaf_hash);
                 assert_eq!(1, li);
                 assert_eq!(235, lp);

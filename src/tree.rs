@@ -1,10 +1,11 @@
-use super::db::Store;
 use super::has_bit;
 use super::hasher::{hash, hash_leaf_value, Digest};
 use super::node::Node;
 use super::proof::{Proof, ProofType};
+use super::urkeldb::Store;
+use super::TreeStore;
 use super::KEY_SIZE;
-use std::sync::{Arc, RwLock};
+//use std::sync::{Arc, RwLock};
 //use log::{info, trace, warn};
 
 //#[derive(Clone)]
@@ -17,11 +18,11 @@ impl<'db> UrkelTree<'db> {
     pub fn new(dir: &'db str) -> Self {
         let s = Store::open(dir).expect("Failed to open store");
         //let wrapped = Arc::new(RwLock::new(s));
-        match s.get_root_node() {
+        match s.get_root() {
             Ok(root) => {
                 println!("loaded root");
                 UrkelTree {
-                    root: Some(Box::new(root)),
+                    root: Some(root),
                     store: s,
                 }
             }
@@ -54,32 +55,10 @@ impl<'db> UrkelTree<'db> {
         loop {
             match *root {
                 Node::Empty {} => break,
-                Node::Hash {
-                    index, pos, hash, ..
-                } => {
-                    // Get the node from store
-                    //if let Ok(mut hn) = self.store.get_node(index, pos, root.is_leaf()) {
-                    //    hn.set_hash(hash);
-                    //    root = hn.into_boxed();
-                    //}
-                    //break;
-
-                    //root = self.store.read().unwrap().resolve(root)
-
-                    let tn = self
-                        .store
-                        .get_node(index, pos, root.is_leaf())
-                        .and_then(|mut n| {
-                            n.set_hash(hash);
-                            Ok(n)
-                        })
-                        .expect("Should have found a hashnode");
-
-                    root = tn.into_boxed();
-                }
-                Node::Leaf { key, hash, .. } => {
+                Node::Hash { .. } => root = self.store.resolve(*root),
+                Node::Leaf { key, data, .. } => {
                     if nkey == key {
-                        if leaf_hash == hash {
+                        if leaf_hash == data {
                             return Some(root);
                         }
                         break;
@@ -135,24 +114,7 @@ impl<'db> UrkelTree<'db> {
         let mut current = self.root.clone().unwrap();
         loop {
             match *current {
-                Node::Hash {
-                    index, pos, hash, ..
-                } => {
-                    // Get the node from store
-                    /*if let Ok(mut hn) = self.store.get_node(index, pos, current.is_leaf()) {
-                        hn.set_hash(hash);
-                        println!("get - load @ {:?}", hn);
-                        current = hn.into_boxed();
-                    }*/
-                    current = self
-                        .store
-                        .get_node(index, pos, current.is_leaf())
-                        .and_then(|mut n| {
-                            n.set_hash(hash);
-                            Ok(n.into_boxed())
-                        })
-                        .expect("Should have got a hashnode");
-                }
+                Node::Hash { .. } => current = self.store.resolve(*current),
                 Node::Leaf {
                     key,
                     vindex,
@@ -164,20 +126,8 @@ impl<'db> UrkelTree<'db> {
                     if nkey != key {
                         return None;
                     }
-
-                    // If the value ! = nil return it
-                    // other wise fetch from the store below
-                    if value.is_some() {
-                        return value;
-                    }
-
-                    println!("try to get value @ {}", vpos);
-                    // Get the value from the store
-                    if let Ok(v) = self.store.get_value(vindex, vpos, vsize) {
-                        return Some(v);
-                    }
-
-                    return None;
+                    // If the value is !None return it. Otherwise go to storage...
+                    return value.or_else(|| self.store.get(vindex, vpos, vsize));
                 }
                 Node::Internal { left, right, .. } => {
                     if has_bit(&nkey, depth) {
@@ -206,14 +156,7 @@ impl<'db> UrkelTree<'db> {
         loop {
             match *root {
                 Node::Empty {} => return Some(root),
-                Node::Hash {
-                    index, pos, hash, ..
-                } => {
-                    if let Ok(mut hn) = self.store.get_node(index, pos, root.is_leaf()) {
-                        hn.set_hash(hash);
-                        root = hn.into_boxed();
-                    }
-                }
+                Node::Hash { .. } => root = self.store.resolve(*root),
                 Node::Internal { left, right, .. } => {
                     assert_ne!(depth, KEY_SIZE);
 
@@ -286,7 +229,7 @@ impl<'db> UrkelTree<'db> {
                     vsize,
                     ..
                 } => {
-                    if let Ok(v) = self.store.get_value(vindex, vpos, vsize) {
+                    if let Some(v) = self.store.get(vindex, vpos, vsize) {
                         if hashed_key == key {
                             proof.proof_type = ProofType::Exists;
                             proof.value = Some(v);
@@ -311,13 +254,8 @@ impl<'db> UrkelTree<'db> {
                     }
                     depth += 1;
                 }
-                Node::Hash {
-                    index, pos, hash, ..
-                } => {
-                    if let Ok(mut hn) = self.store.get_node(index, pos, current.is_leaf()) {
-                        hn.set_hash(hash);
-                        current = hn.into_boxed();
-                    }
+                Node::Hash { .. } => {
+                    current = self.store.resolve(*current);
                 }
             }
         }
@@ -326,13 +264,14 @@ impl<'db> UrkelTree<'db> {
 
     pub fn commit(&mut self) {
         // Commit the nodes and set a new root
-        if let Some(r) = self.root.take().map(|n| self.write_to_store(n)) {
-            let (i, p) = r.get_index_position();
-            let is_leaf = r.is_leaf();
-            self.store.commit(i, p, is_leaf).expect("Commit failed");
-            println!("new root is {:?}", r);
-            self.root = Some(r);
-        }
+        self.root = self
+            .root
+            .take()
+            .map(|n| self.write_to_store(n))
+            .and_then(|nr| match self.store.commit(nr) {
+                Ok(nn) => Some(nn),
+                _ => None,
+            })
     }
 
     fn write_to_store(&mut self, root: Box<Node>) -> Box<Node> {
@@ -347,21 +286,17 @@ impl<'db> UrkelTree<'db> {
                 let left_node = self.write_to_store(left);
                 let right_node = self.write_to_store(right);
 
-                let mut nn = Node::Internal {
+                let nn = Node::Internal {
                     index,
                     pos,
                     left: left_node,
                     right: right_node,
-                    hash: Digest::default(),
+                    data: Digest::default(),
                 };
-
+                // If it hasn't been saved, do so
                 if index == 0 {
-                    let encoded = nn.encode().unwrap();
-                    let (i, p) = self.store.write_node(encoded).unwrap();
-                    nn.set_index_position(i, p);
-                    //println!("write to store internal @ {} {}", i, p);
+                    return self.store.save(nn);
                 }
-
                 return nn.into_hash_node().into_boxed();
             }
             Node::Leaf {
@@ -370,20 +305,10 @@ impl<'db> UrkelTree<'db> {
                 ref value,
                 ..
             } => {
+                // If it hasn't been saved and it has a value...
                 if index == 0 && value.is_some() {
-                    let v = value.clone();
-                    let v1 = value.clone();
-
-                    let mut l = Node::new_leaf_node(key, v.unwrap());
-
-                    let (v_i, v_p) = self.store.write_value(v1.unwrap().as_ref()).unwrap();
-                    l.set_value_index_position(v_i, v_p);
-
-                    let encoded = l.encode().unwrap();
-                    let (i, p) = self.store.write_node(encoded).unwrap();
-                    l.set_index_position(i, p);
-
-                    return l.into_hash_node().into_boxed();
+                    let nn = Node::new_leaf_node(key, value.clone().unwrap());
+                    return self.store.save(nn);
                 }
                 return root.into_hash_node().into_boxed();
             }
