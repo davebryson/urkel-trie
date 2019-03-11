@@ -3,11 +3,8 @@ use byteorder::{ByteOrder, LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io;
 use std::io::{Cursor, Error, ErrorKind};
 
-pub const LEAF_NODE_SIZE: usize = 41;
-pub const INTERNAL_NODE_SIZE: usize = 78;
-
-const LEAF_NODE_FLAG: u8 = 1u8;
-const INTERNAL_NODE_FLAG: u8 = 0u8;
+pub const LEAF_NODE_SIZE: usize = 40;
+pub const INTERNAL_NODE_SIZE: usize = 76;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Node {
@@ -62,6 +59,16 @@ impl Node {
         }
     }
 
+    // Used in resolve
+    /*pub fn update_hash(&mut self, node: Box<Node>) {
+        match self {
+            Node::Hash { ref mut hash, .. } => *hash = *node.hash,
+            Node::Leaf { ref mut hash, .. } => *hash = data,
+            Node::Internal { ref mut hash, .. } => *hash = data,
+            _ => unimplemented!(),
+        }
+    }*/
+
     pub fn set_hash(&mut self, data: Digest) {
         match self {
             Node::Hash { ref mut hash, .. } => *hash = data,
@@ -72,12 +79,12 @@ impl Node {
     }
 
     /// Get the value of a leaf node
-    pub fn get_value(&self) -> Option<&Vec<u8>> {
+    /*pub fn get_value(&self) -> Option<&Vec<u8>> {
         match self {
             Node::Leaf { ref value, .. } => value.as_ref().map(|v| v),
             _ => None,
         }
-    }
+    }*/
 
     /// Set the position of the actual leaf value and it's position
     /// in the leaf node. Used to update the node when writing to storage.
@@ -97,7 +104,7 @@ impl Node {
 
     /// Get information associated with the actual leaf value:
     /// the file index, value pos, and value size
-    pub fn get_leaf_value_data(&self) -> (u16, u32, u16) {
+    /* pub fn get_leaf_value_data(&self) -> (u16, u32, u16) {
         match self {
             Node::Leaf {
                 vindex,
@@ -107,7 +114,7 @@ impl Node {
             } => (*vindex, *vpos, *vsize),
             _ => unimplemented!(),
         }
-    }
+    }*/
 
     /// Get the storage index and position of a given node
     pub fn get_index_position(&self) -> (u16, u32) {
@@ -116,6 +123,36 @@ impl Node {
             Node::Internal { index, pos, .. } => (*index, *pos),
             Node::Hash { index, pos, .. } => (*index, *pos),
             Node::Empty {} => (0, 0),
+        }
+    }
+
+    pub fn update_db_ptr(&mut self, i: u16, p: u32) {
+        match self {
+            Node::Leaf {
+                ref mut index,
+                ref mut pos,
+                ..
+            } => {
+                *index = i;
+                *pos = p;
+            }
+            Node::Internal {
+                ref mut index,
+                ref mut pos,
+                ..
+            } => {
+                *index = i;
+                *pos = p;
+            }
+            Node::Hash {
+                ref mut index,
+                ref mut pos,
+                ..
+            } => {
+                *index = i;
+                *pos = p;
+            }
+            _ => unimplemented!(),
         }
     }
 
@@ -222,27 +259,34 @@ impl Node {
         Box::new(self)
     }
 
-    fn get_node_type(leafflag: bool) -> u8 {
-        if leafflag {
-            LEAF_NODE_FLAG
+    /// Encode the position with an additional flag when persisting the node so we
+    /// can determine the type of node when decoding raw bits.
+    fn tag_pos_for_leaf_or_internal(pos: u32, is_leaf: bool) -> u32 {
+        if is_leaf {
+            return pos * 2 + 1;
         } else {
-            INTERNAL_NODE_FLAG
+            return pos * 2;
         }
     }
 
+    /// Shapeshift the encoded pos to the true position and determine whether it's
+    /// a leaf or internal node.  Used when decoding the node. So the tree always
+    /// uses the true storage position
+    fn get_pos_tag(flagged_pos: u32) -> (u32, u8) {
+        let is_leaf = (flagged_pos & 1) as u8;
+        let pos = flagged_pos >> 1;
+        return (pos, is_leaf);
+    }
+
     /// Encode a leaf or internal node for storage.
-    /// New Format.  Each node starts with an u8 marking whether it's a leaf or internal node.
-    /// 0 = leaf, 1 = internal
-    /// Leaf: (41 bytes total)
-    ///  - u8 (1)    - flag marking it a leaf/internal
+    /// Leaf: (40 bytes total)
     ///  - u16 (2)  - value file index
     ///  - u32 (4)  - value position
     ///  - u16 (2)  - value size
     ///  - (32)     - key hash
     ///
-    /// Internal: (78 bytes total)
+    /// Internal: (76 bytes total)
     /// Left Node:
-    ///  - u8 (1)  - flag marking it a leaf /internal
     ///  - u16 (2)  - file index
     ///  - u32 (4)  - file position
     ///  - (32)     - hash
@@ -262,10 +306,10 @@ impl Node {
                 assert!(value.is_some(), "Leaf has no value!");
                 // Write the leaf node with the actual value information:
 
-                // Leaf flag marker
-                writer.write_u8(LEAF_NODE_FLAG)?;
                 // leaf value file index
-                writer.write_u16::<LittleEndian>(*vindex)?;
+                // Note: (* 2 + 1). this is used as a simple check for corruption
+                // during decode
+                writer.write_u16::<LittleEndian>(*vindex * 2 + 1)?;
                 // leaf value file position
                 writer.write_u32::<LittleEndian>(*vpos)?;
                 // the value size
@@ -279,27 +323,30 @@ impl Node {
                 // Do the left node first...
                 // check to see if it's a leaf so we can encode it with the proper 'tag'
                 let (lindex, lpos) = left.get_index_position();
-                let left_flag = Node::get_node_type(left.is_leaf());
+                let left_is_leaf = left.is_leaf();
 
-                // Write left node type
-                writer.write_u8(left_flag)?;
                 // index of file
-                writer.write_u16::<LittleEndian>(lindex)?;
+                // Note: (* 2). this is used as a simple check for corruption
+                // during decode
+                writer.write_u16::<LittleEndian>(lindex * 2)?;
+
                 // pos - note the tagging
-                writer.write_u32::<LittleEndian>(lpos)?;
+                let left_pos = Node::tag_pos_for_leaf_or_internal(lpos, left_is_leaf);
+                writer.write_u32::<LittleEndian>(left_pos)?;
                 // hash
                 writer.extend_from_slice(&(left.hash()).0);
 
                 // right node
                 let (rindex, rpos) = right.get_index_position();
-                let right_flag = Node::get_node_type(right.is_leaf());
+                //let right_flag = Node::get_node_type(right.is_leaf());
+                let right_is_leaf = right.is_leaf();
 
                 // Write right node type
-                writer.write_u8(right_flag)?;
                 // index of file
                 writer.write_u16::<LittleEndian>(rindex)?;
                 // flags
-                writer.write_u32::<LittleEndian>(rpos)?;
+                let right_pos = Node::tag_pos_for_leaf_or_internal(rpos, right_is_leaf);
+                writer.write_u32::<LittleEndian>(right_pos)?;
                 // hash
                 writer.extend_from_slice(&(right.hash()).0);
 
@@ -322,16 +369,14 @@ impl Node {
 
             // Grab the key from the end. We start at 8 as that's the end of the header
             // information.
-            let k = bits.split_off(9);
+            let k = bits.split_off(8);
+
             // Read the header information
             let mut rdr = Cursor::new(bits);
-            let flag = rdr.read_u8()?;
-            assert_eq!(
-                LEAF_NODE_FLAG, flag,
-                "Decoded leaf has wrong node type flag"
-            );
+            let shifted_vindex = rdr.read_u16::<LittleEndian>()?;
+            assert!(shifted_vindex & 1 == 1, "Corrupt database @ leaf");
+            let vindex = shifted_vindex >> 1;
 
-            let vindex = rdr.read_u16::<LittleEndian>()?;
             let vpos = rdr.read_u32::<LittleEndian>()?;
             let vsize = rdr.read_u16::<LittleEndian>()?;
 
@@ -359,45 +404,48 @@ impl Node {
 
             // Parse internal node
             let mut offset = 0;
-            let left_node_type = &bits[offset];
-            offset += 1;
 
-            let left_index = LittleEndian::read_u16(&bits[offset..]);
+            let shifted_left_index = LittleEndian::read_u16(&bits[offset..]);
             offset += 2;
+            assert!(
+                shifted_left_index & 1 == 0,
+                "Corrupt database @ internal node"
+            );
+            let left_index = shifted_left_index >> 1;
 
             let leftnode = if left_index != 0 {
                 let left_pos = LittleEndian::read_u32(&bits[offset..]);
+                let (lpos, left_leaf_flag) = Node::get_pos_tag(left_pos);
                 offset += 4;
                 let left_hash = &bits[offset..offset + 32];
                 offset += 32;
 
                 // add hashnode to left
                 Node::Hash {
-                    pos: left_pos,
+                    pos: lpos,
                     index: left_index,
                     hash: Digest::from(left_hash),
-                    is_leaf: *left_node_type,
+                    is_leaf: left_leaf_flag,
                 }
             } else {
                 offset += 4 + 32;
                 Node::Empty {}
             };
 
-            let right_node_type = &bits[offset];
-            offset += 1;
             let right_index = LittleEndian::read_u16(&bits[offset..]);
             offset += 2;
 
             let rightnode = if right_index != 0 {
                 let right_pos = LittleEndian::read_u32(&bits[offset..]);
+                let (rpos, right_leaf_flag) = Node::get_pos_tag(right_pos);
                 offset += 4;
                 let right_hash = &bits[offset..offset + 32];
 
                 Node::Hash {
-                    pos: right_pos,
+                    pos: rpos,
                     index: right_index,
                     hash: Digest::from(right_hash),
-                    is_leaf: *right_node_type,
+                    is_leaf: right_leaf_flag,
                 }
             } else {
                 Node::Empty {}

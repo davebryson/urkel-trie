@@ -69,7 +69,7 @@ mod tests {
         use std::fs;
 
         let mut tree = UrkelTree::new("data");
-        for i in 1..10000 {
+        for i in 1..20000 {
             tree.insert(format!("name-{}", i).as_bytes(), format!("value-{}", i));
         }
         tree.commit();
@@ -83,7 +83,7 @@ mod tests {
         assert!(r.is_ok());
         assert_eq!(Ok(Vec::from("value-401")), r);
 
-        fs::remove_file("data/0000000001").expect("Should have deleted test file");
+        //fs::remove_file("data/0000000001").expect("Should have deleted test file");
     }
 
     #[test]

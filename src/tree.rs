@@ -4,6 +4,7 @@ use super::hasher::{hash, hash_leaf_value, Digest};
 use super::node::Node;
 use super::proof::{Proof, ProofType};
 use super::KEY_SIZE;
+use std::sync::{Arc, RwLock};
 //use log::{info, trace, warn};
 
 //#[derive(Clone)]
@@ -15,6 +16,7 @@ pub struct UrkelTree<'db> {
 impl<'db> UrkelTree<'db> {
     pub fn new(dir: &'db str) -> Self {
         let s = Store::open(dir).expect("Failed to open store");
+        //let wrapped = Arc::new(RwLock::new(s));
         match s.get_root_node() {
             Ok(root) => {
                 println!("loaded root");
@@ -62,6 +64,8 @@ impl<'db> UrkelTree<'db> {
                     //}
                     //break;
 
+                    //root = self.store.read().unwrap().resolve(root)
+
                     let tn = self
                         .store
                         .get_node(index, pos, root.is_leaf())
@@ -69,7 +73,7 @@ impl<'db> UrkelTree<'db> {
                             n.set_hash(hash);
                             Ok(n)
                         })
-                        .expect("Should have got a hashnode");
+                        .expect("Should have found a hashnode");
 
                     root = tn.into_boxed();
                 }

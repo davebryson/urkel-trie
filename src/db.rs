@@ -33,7 +33,7 @@ impl Default for Meta {
 impl Meta {
     pub fn open(dir: &str, file_id: u16) -> Result<Meta> {
         let logfilename = get_log_filename(dir, file_id);
-        let mut file = get_file(&logfilename, false)?;
+        let mut file = get_file(&logfilename, false)?; // read only
 
         let mut file_size: u64 = 0;
         if let Ok(m) = file.metadata() {
@@ -51,6 +51,7 @@ impl Meta {
             });
         }
 
+        // Start looking for the last meta
         let mut start_pos: i64 = (file_size - (file_size % META_ENTRY_SIZE)) as i64;
         loop {
             start_pos -= META_ENTRY_SIZE as i64;
@@ -114,16 +115,8 @@ pub struct Store<'a> {
 
 impl<'a> Drop for Store<'a> {
     fn drop(&mut self) {
-        println!("Dropping Store!");
         self.file.flush().unwrap();
         self.file.sync_all().unwrap();
-    }
-}
-
-fn maybe_create_dir(dir: &str) {
-    let store_path = PathBuf::from(dir);
-    if !store_path.exists() {
-        fs::create_dir(PathBuf::from(dir)).expect("Attempted to create missing store dir");
     }
 }
 
@@ -206,6 +199,7 @@ impl<'a> Store<'a> {
         Ok(buf)
     }
 
+    // Get the last committed root node from the meta information.
     pub fn get_root_node(&self) -> io::Result<Node> {
         println!("get root node @ {:?}", self.meta.root_pos);
         self.get_node(self.meta.root_index, self.meta.root_pos, self.meta.is_leaf)
@@ -216,7 +210,35 @@ impl<'a> Store<'a> {
             })
     }
 
-    // Read node (internal or leaf) from file
+    // Future code
+    /*pub fn resolve(&self, node: Box<Node>) -> Box<Node> {
+        let (index, pos) = node.get_index_position();
+        let is_leaf = node.is_leaf();
+        self.read_node(index, pos, is_leaf)
+            .and_then(|n| {
+                n.set_hash(*node.hash);
+                Ok(n.into_boxed())
+            })
+            .unwrap()
+    }
+
+    fn read_node(&self, index: u16, pos: u32, is_leaf: bool) -> io::Result<Node> {
+        let current_file = get_db_file_path(&self.dir, index);
+        let mut fs = get_file(&current_file, false)?;
+        fs.seek(SeekFrom::Start(pos as u64))?;
+
+        let packet_size = if is_leaf {
+            LEAF_NODE_SIZE
+        } else {
+            INTERNAL_NODE_SIZE
+        };
+
+        let mut packet = vec![0u8; packet_size];
+        fs.read(&mut packet[..])?;
+        Node::decode(packet, is_leaf)
+    }*/
+
+    // Read node: used in tree calls to resolve a Hash::
     pub fn get_node(&self, index: u16, pos: u32, is_leaf: bool) -> io::Result<Node> {
         let current_file = get_db_file_path(&self.dir, index);
         //println!("Trying to get file @ {:?}", current_file);
@@ -293,7 +315,7 @@ fn load_log_files(dir: &str) -> Result<Vec<u16>> {
         return Err(Error::NoLogFiles);
     }
 
-    // Sort so the latest index is the first element [0]
+    // Sort so the latest index is the first element - [0]
     data_files.sort_by(|a, b| b.cmp(a));
     Ok(data_files)
 }
@@ -307,6 +329,13 @@ fn valid_log_filename(val: &str) -> u16 {
 
 // Helpers
 
+fn maybe_create_dir(dir: &str) {
+    let store_path = PathBuf::from(dir);
+    if !store_path.exists() {
+        fs::create_dir(PathBuf::from(dir)).expect("Attempted to create missing db dir");
+    }
+}
+
 /// Open/Create a file for read or append
 pub fn get_file(path: &Path, write: bool) -> io::Result<File> {
     if write {
@@ -316,7 +345,7 @@ pub fn get_file(path: &Path, write: bool) -> io::Result<File> {
     }
 }
 
-/// Return the the current db path/filename
+/// Return a db path/filename
 pub fn get_db_file_path(path: &Path, file_id: u16) -> PathBuf {
     let file_id = format!("{:010}", file_id);
     path.join(file_id)
