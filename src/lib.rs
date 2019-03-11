@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+//#![allow(dead_code)]
 
 extern crate blake2_rfc;
 extern crate byteorder;
@@ -14,6 +14,7 @@ pub mod tree;
 
 use crate::hasher::Digest;
 
+// Size of the hash result.  Used in several places
 pub const KEY_SIZE: usize = 256;
 
 /// Common function used in several places in the tree and proof to determine which
@@ -26,8 +27,6 @@ pub fn has_bit(key: &Digest, index: usize) -> bool {
         _ => false,
     }
 }
-
-pub trait UrkelStore: Send + Sync {}
 
 // --- Tests --- /
 #[cfg(test)]
@@ -73,7 +72,7 @@ mod tests {
         for i in 1..10000 {
             tree.insert(format!("name-{}", i).as_bytes(), format!("value-{}", i));
         }
-        //tree.commit(); // THIS CAUSES TEST TO FAIL.
+        tree.commit();
 
         assert_eq!(tree.get(b"name-5001"), Some(Vec::from("value-5001")));
 
@@ -81,11 +80,10 @@ mod tests {
         assert_eq!(proof1.proof_type, ProofType::Exists);
 
         let r = proof1.verify(tree.get_root(), b"name-401");
-        println!("{:?}", r);
         assert!(r.is_ok());
         assert_eq!(Ok(Vec::from("value-401")), r);
 
-        //fs::remove_file("data/0000000001").expect("Should have deleted test file");
+        fs::remove_file("data/0000000001").expect("Should have deleted test file");
     }
 
     #[test]

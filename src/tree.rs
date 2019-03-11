@@ -4,7 +4,6 @@ use super::hasher::{hash, hash_leaf_value, Digest};
 use super::node::Node;
 use super::proof::{Proof, ProofType};
 use super::KEY_SIZE;
-use std::sync::Arc;
 //use log::{info, trace, warn};
 
 //#[derive(Clone)]
@@ -275,15 +274,24 @@ impl<'db> UrkelTree<'db> {
         loop {
             match *current {
                 Node::Empty {} => break,
-                Node::Leaf { key, value, .. } => {
-                    if hashed_key == key {
-                        proof.proof_type = ProofType::Exists;
-                        proof.value = value;
-                    } else {
-                        // We got to the leaf but the keys don't match
-                        proof.proof_type = ProofType::Collision;
-                        proof.key = Some(key);
-                        proof.hash = value.map(|v| hash(v.as_slice()));
+                Node::Leaf {
+                    key,
+                    value,
+                    vindex,
+                    vpos,
+                    vsize,
+                    ..
+                } => {
+                    if let Ok(v) = self.store.get_value(vindex, vpos, vsize) {
+                        if hashed_key == key {
+                            proof.proof_type = ProofType::Exists;
+                            proof.value = Some(v);
+                        } else {
+                            // We got to the leaf but the keys don't match
+                            proof.proof_type = ProofType::Collision;
+                            proof.key = Some(key);
+                            proof.hash = value.map(|v| hash(v.as_slice()));
+                        }
                     }
                     break;
                 }
@@ -307,7 +315,6 @@ impl<'db> UrkelTree<'db> {
                         current = hn.into_boxed();
                     }
                 }
-                _ => break,
             }
         }
         proof
