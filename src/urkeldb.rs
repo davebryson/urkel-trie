@@ -1,6 +1,6 @@
 use super::errors::{Error, Result};
 use super::node::{Node, INTERNAL_NODE_SIZE, LEAF_NODE_SIZE};
-use super::TreeStore;
+use super::TrieStore;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
@@ -196,7 +196,7 @@ impl<'a> Store<'a> {
     }
 }
 
-impl<'a> TreeStore for Store<'a> {
+impl<'a> TrieStore for Store<'a> {
     /// Write a node to storage. Returns the node transformed into boxed hash node
     fn save(&mut self, mut node: Node) -> Box<Node> {
         match node {

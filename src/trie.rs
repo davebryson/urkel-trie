@@ -4,22 +4,22 @@ use super::hasher::{hash, hash_leaf_value, Digest};
 use super::node::Node;
 use super::proof::{Proof, ProofType};
 use super::urkeldb::Store;
-use super::TreeStore;
+use super::TrieStore;
 use std::sync::{Arc, RwLock};
 //use log::{info, trace, warn};
 
 //#[derive(Clone)]
-pub struct UrkelTree<'db> {
+pub struct UrkelTrie<'db> {
     root: Option<Box<Node>>,
     store: Arc<RwLock<Store<'db>>>,
 }
 
-impl<'db> UrkelTree<'db> {
+impl<'db> UrkelTrie<'db> {
     /// Create a tree. Opens the database and attemps to load the last
     /// root if any. Otherwise starts with an empty tree node.
     pub fn new(dir: &'db str) -> Self {
         let db = Store::open(dir).expect("Failed to open store");
-        let mut tree = UrkelTree {
+        let mut tree = UrkelTrie {
             root: None,
             store: Arc::new(RwLock::new(db)),
         };

@@ -10,7 +10,7 @@ mod errors;
 pub mod hasher;
 mod node;
 pub mod proof;
-pub mod tree;
+pub mod trie;
 mod urkeldb;
 
 use crate::hasher::Digest;
@@ -28,7 +28,7 @@ pub fn has_bit(key: &Digest, index: usize) -> bool {
     }
 }
 
-pub trait TreeStore {
+pub trait TrieStore {
     /// Write a node to storage. This consumes the incoming node and returns
     /// a boxed hash node.
     fn save(&mut self, node: Node) -> Box<Node>;
