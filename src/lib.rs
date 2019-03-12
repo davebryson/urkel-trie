@@ -17,9 +17,6 @@ use crate::hasher::Digest;
 use crate::node::Node;
 use std::io;
 
-// Size of the hash result.  Used in several places
-pub const KEY_SIZE: usize = 256;
-
 /// Common function used in several places in the tree and proof to determine which
 /// direction to go in the tree.
 pub fn has_bit(key: &Digest, index: usize) -> bool {

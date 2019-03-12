@@ -252,15 +252,11 @@ impl<'a> TreeStore for Store<'a> {
         let (root_index, root_pos) = root.get_storage_location();
         let is_leaf = root.is_leaf();
 
-        // Dump all buffered write to file
-        self.file.write_all(&self.buf[..])?;
-
-        // Do meta
+        // Add the meta root
         // Adding padding boundaries to the meta if needed
         let pad_size = META_ENTRY_SIZE - (self.pos as u64 % META_ENTRY_SIZE);
         let padding = vec![0; pad_size as usize];
-        self.file.write_all(&padding[..])?;
-        self.pos += pad_size as u32;
+        let _ = self.write_to_buffer(&padding).unwrap();
 
         // Update and save the meta
         self.meta.index = root_index;
@@ -268,10 +264,14 @@ impl<'a> TreeStore for Store<'a> {
         self.meta.root_index = root_index;
         self.meta.root_pos = root_pos;
         self.meta.is_leaf = is_leaf;
-        self.meta
+        let _ = self
+            .meta
             .encode()
-            .and_then(|encoded| self.file.write_all(encoded.as_slice()))?;
-        self.pos += META_ENTRY_SIZE as u32;
+            .and_then(|bits| self.write_to_buffer(&bits))
+            .unwrap();
+
+        // Dump the buffer to file!
+        self.file.write_all(&self.buf[..])?;
 
         // Flush
         self.file.flush()?;
@@ -294,9 +294,18 @@ impl<'a> TreeStore for Store<'a> {
     }
 }
 
+// ------- lil helpers ---------
+
+// TODO: Consolidate these two
 fn get_log_filename(dir: &str, file_index: u16) -> PathBuf {
     let path = Path::new(dir);
     let file_id = format!("{:010}", file_index);
+    path.join(file_id)
+}
+
+/// Return a db path/filename
+fn get_db_file_path(path: &Path, file_id: u16) -> PathBuf {
+    let file_id = format!("{:010}", file_id);
     path.join(file_id)
 }
 
@@ -334,8 +343,6 @@ fn valid_log_filename(val: &str) -> u16 {
     u16::from_str(val).unwrap_or(0)
 }
 
-// Helpers
-
 fn maybe_create_dir(dir: &str) {
     let store_path = PathBuf::from(dir);
     if !store_path.exists() {
@@ -344,16 +351,10 @@ fn maybe_create_dir(dir: &str) {
 }
 
 /// Open/Create a file for read or append
-pub fn get_file(path: &Path, write: bool) -> io::Result<File> {
+fn get_file(path: &Path, write: bool) -> io::Result<File> {
     if write {
         OpenOptions::new().create(true).append(true).open(path)
     } else {
         OpenOptions::new().read(true).open(path)
     }
-}
-
-/// Return a db path/filename
-pub fn get_db_file_path(path: &Path, file_id: u16) -> PathBuf {
-    let file_id = format!("{:010}", file_id);
-    path.join(file_id)
 }

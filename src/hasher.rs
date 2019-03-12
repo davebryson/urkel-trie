@@ -3,6 +3,8 @@ use std::fmt;
 
 const LEAF_PREFIX: u8 = 0x00u8;
 const INTERNAL_PREFIX: u8 = 0x01u8;
+// Size of the hash result.  Used in several places
+pub const KEY_SIZE: usize = 256;
 
 #[derive(Eq, PartialEq, PartialOrd, Clone, Copy)]
 pub struct Digest(pub [u8; 32]);
