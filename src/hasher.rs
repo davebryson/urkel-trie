@@ -4,7 +4,7 @@ use std::fmt;
 const LEAF_PREFIX: u8 = 0x00u8;
 const INTERNAL_PREFIX: u8 = 0x01u8;
 // Size of the hash result.  Used in several places
-pub const KEY_SIZE: usize = 256;
+pub(crate) const KEY_SIZE: usize = 256;
 
 #[derive(Eq, PartialEq, PartialOrd, Clone, Copy)]
 pub struct Digest(pub [u8; 32]);
@@ -48,14 +48,14 @@ impl fmt::Debug for Digest {
     }
 }
 
-pub fn hash(data: &[u8]) -> Digest {
+pub(crate) fn hash(data: &[u8]) -> Digest {
     let mut context = Blake2b::new(32);
     context.update(data);
     let hash = context.finalize();
     Digest::from(hash.as_bytes())
 }
 
-pub fn hash_leaf(key: Digest, value: &[u8]) -> Digest {
+pub(crate) fn hash_leaf(key: Digest, value: &[u8]) -> Digest {
     let mut context = Blake2b::new(32);
     context.update(&[LEAF_PREFIX]);
     context.update(&key.0);
@@ -64,12 +64,12 @@ pub fn hash_leaf(key: Digest, value: &[u8]) -> Digest {
     Digest::from(hash.as_bytes())
 }
 
-pub fn hash_leaf_value(key: Digest, value: &[u8]) -> Digest {
+pub(crate) fn hash_leaf_value(key: Digest, value: &[u8]) -> Digest {
     let val = hash(value);
     hash_leaf(key, &val.0)
 }
 
-pub fn hash_internal(left: Digest, right: Digest) -> Digest {
+pub(crate) fn hash_internal(left: Digest, right: Digest) -> Digest {
     let mut context = Blake2b::new(32);
     context.update(&[INTERNAL_PREFIX]);
     context.update(&left.0);

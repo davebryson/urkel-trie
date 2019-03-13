@@ -33,7 +33,7 @@ impl Default for Meta {
 
 impl Meta {
     pub fn open(dir: &str, file_id: u16) -> Result<Meta> {
-        let logfilename = get_log_filename(dir, file_id);
+        let logfilename = get_log_filename(&Path::new(dir), file_id);
         let mut file = get_file(&logfilename, false)?; // read only
 
         let mut file_size: u64 = 0;
@@ -141,7 +141,8 @@ impl<'a> Store<'a> {
             _ => panic!("Failed loading logfiles"),
         };
 
-        let logfilename = get_log_filename(dir, meta.root_index);
+        let store_path = Path::new(dir);
+        let logfilename = get_log_filename(&store_path, meta.root_index);
         let logfile_handle = get_file(&logfilename, true)?;
 
         // Determine starting pos. Store.pos is used by the buffer to track
@@ -154,7 +155,7 @@ impl<'a> Store<'a> {
         };
 
         Ok(Store {
-            dir: Path::new(dir),
+            dir: store_path, //Path::new(dir),
             pos: start_pos,
             file: logfile_handle,
             meta: meta,
@@ -164,7 +165,7 @@ impl<'a> Store<'a> {
     }
 
     fn raw_read(&self, index: u16, pos: u32, size: usize) -> io::Result<Vec<u8>> {
-        let current_file = get_db_file_path(&self.dir, index);
+        let current_file = get_log_filename(&self.dir, index);
         let mut fs = get_file(&current_file, false)?;
         fs.seek(SeekFrom::Start(pos as u64))?;
 
@@ -196,6 +197,7 @@ impl<'a> Store<'a> {
     }
 }
 
+/// Implementation of the TrieStore Trait
 impl<'a> TrieStore for Store<'a> {
     /// Write a node to storage. Returns the node transformed into boxed hash node
     fn save(&mut self, mut node: Node) -> Box<Node> {
@@ -296,19 +298,14 @@ impl<'a> TrieStore for Store<'a> {
 
 // ------- lil helpers ---------
 
-// TODO: Consolidate these two
-fn get_log_filename(dir: &str, file_index: u16) -> PathBuf {
-    let path = Path::new(dir);
-    let file_id = format!("{:010}", file_index);
-    path.join(file_id)
-}
-
-/// Return a db path/filename
-fn get_db_file_path(path: &Path, file_id: u16) -> PathBuf {
+// Return a log path/filename. Where files are formatted as: '0000000001', etc...
+fn get_log_filename(path: &Path, file_id: u16) -> PathBuf {
     let file_id = format!("{:010}", file_id);
     path.join(file_id)
 }
 
+// Used on startup. Load all valid log files and sort then in descending order.
+// vec[0] is the latest logfile
 fn load_log_files(dir: &str) -> Result<Vec<u16>> {
     let data_path = Path::new(dir);
     let files = fs::read_dir(data_path)?;
@@ -336,6 +333,8 @@ fn load_log_files(dir: &str) -> Result<Vec<u16>> {
     Ok(data_files)
 }
 
+// Is this a valid log filename?  We use this to filter out other files
+// in the store directory.
 fn valid_log_filename(val: &str) -> u16 {
     if val.len() < 10 {
         return 0;
@@ -350,7 +349,7 @@ fn maybe_create_dir(dir: &str) {
     }
 }
 
-/// Open/Create a file for read or append
+// Open/Create a file for read or append
 fn get_file(path: &Path, write: bool) -> io::Result<File> {
     if write {
         OpenOptions::new().create(true).append(true).open(path)

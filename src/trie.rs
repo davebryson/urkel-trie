@@ -8,7 +8,7 @@ use super::TrieStore;
 use std::sync::{Arc, RwLock};
 //use log::{info, trace, warn};
 
-//#[derive(Clone)]
+#[derive(Clone)]
 pub struct UrkelTrie<'db> {
     root: Option<Box<Node>>,
     store: Arc<RwLock<Store<'db>>>,
@@ -31,7 +31,8 @@ impl<'db> UrkelTrie<'db> {
         tree
     }
 
-    pub fn set<T>(&mut self, key: &[u8], value: T)
+    /// Insert a key/value into the trie.  The key is automatically hashed.
+    pub fn insert<T>(&mut self, key: &[u8], value: T)
     where
         T: Into<Vec<u8>>,
     {
@@ -98,11 +99,12 @@ impl<'db> UrkelTrie<'db> {
         Some(Box::new(new_root))
     }
 
-    /// Get the root hash
+    /// Get the current root hash of the trie
     pub fn get_root_hash(&self) -> Digest {
         self.root.as_ref().map_or(Digest::zero(), |r| r.hash())
     }
 
+    /// Get a value for a given key
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         let mut depth = 0;
         let nkey = hash(key);
@@ -137,6 +139,7 @@ impl<'db> UrkelTrie<'db> {
         }
     }
 
+    /// Remove a key
     pub fn remove(&mut self, key: &[u8]) {
         let hashed_key = hash(key);
         match self.root.take() {
@@ -208,6 +211,7 @@ impl<'db> UrkelTrie<'db> {
         Some(new_root.into_boxed())
     }
 
+    /// Proof if a given key exists
     pub fn prove(&self, nkey: &[u8]) -> Proof {
         let mut depth = 0;
         let hashed_key = hash(nkey);
@@ -257,6 +261,7 @@ impl<'db> UrkelTrie<'db> {
         proof
     }
 
+    /// Commit the latest to storage, returing the new root
     pub fn commit(&mut self) {
         // Commit the nodes and set a new root
         self.root = self
